@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Endless Road in Three.js</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, roadSegments = [], streetLamps = [], buildings = [], stars = [], specks = [], desertObjects = [];
+        const roadWidth = 10, roadLength = 20, segmentCount = 50;
+        const lampHeight = 10, lampSpacing = 30, twinkleSpeed = 0.002;  // Spaced out lamps, slower twinkle speed
+        const speckCount = 2000;  // Increase speck count
+        const desertPalette = [
+            new THREE.Color(0xC2B280), // Sand color
+            new THREE.Color(0xD2B48C), // Tan
+            new THREE.Color(0xF4A460), // Sandy brown
+            new THREE.Color(0xDEB887), // Burly wood
+            new THREE.Color(0x8B4513)  // Saddle brown
+        ];
+
+        function init() {
+            // Create the scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            // Create the camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.x = 3;
+            camera.position.y = 3;
+            camera.position.z = 70;
+            camera.lookAt(15, 10, 0);
+
+            // Create the renderer
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Create road segments
+            const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+            const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+
+            for (let i = 0; i < segmentCount; i++) {
+                // Road surface
+                const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+                const roadSegment = new THREE.Mesh(roadGeometry, roadMaterial);
+                roadSegment.rotation.x = -Math.PI / 2;
+                roadSegment.position.z = -i * roadLength;
+                scene.add(roadSegment);
+                roadSegments.push(roadSegment);
+
+                // Left lane line
+                const leftLineGeometry = new THREE.PlaneGeometry(0.2, roadLength);
+                const leftLine = new THREE.Mesh(leftLineGeometry, lineMaterial);
+                leftLine.rotation.x = -Math.PI / 2;
+                leftLine.position.x = -roadWidth / 2;
+                leftLine.position.z = -i * roadLength;
+                scene.add(leftLine);
+                roadSegments.push(leftLine);
+
+                // Right lane line
+                const rightLineGeometry = new THREE.PlaneGeometry(0.2, roadLength);
+                const rightLine = new THREE.Mesh(rightLineGeometry, lineMaterial);
+                rightLine.rotation.x = -Math.PI / 2;
+                rightLine.position.x = roadWidth / 2;
+                rightLine.position.z = -i * roadLength;
+                scene.add(rightLine);
+                roadSegments.push(rightLine);
+
+                // Dashed center line
+                const dashLength = 1;
+                const dashSpacing = 10;
+                const numDashes = roadLength / (dashLength + dashSpacing);
+                for (let j = 0; j < numDashes; j++) {
+                    const dashGeometry = new THREE.PlaneGeometry(0.1, dashLength);
+                    const dash = new THREE.Mesh(dashGeometry, lineMaterial);
+                    dash.rotation.x = -Math.PI / 2;
+                    dash.position.z = -i * roadLength + j * (dashLength + dashSpacing);
+                    scene.add(dash);
+                    roadSegments.push(dash);
+                }
+            }
+
+            // Create street lamps
+            for (let i = 0; i < segmentCount; i++) {
+                const lamp = createStreetLamp();
+                lamp.position.set(-roadWidth / 2 - 2, lampHeight, -i * lampSpacing);
+                scene.add(lamp);
+                streetLamps.push(lamp);
+            }
+
+            // Create buildings less frequently and spread out with wireframe material
+            for (let i = 0; i < segmentCount / 2; i++) {  // Fewer buildings
+                const building = createRandomBuilding();
+                building.position.set((Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 10 + Math.random() * 20), 0, -i * roadLength * 2);
+                scene.add(building);
+                buildings.push(building);
+            }
+
+            // Create random desert objects
+            for (let i = 0; i < segmentCount; i++) {
+                const desertObject = createDesertObject();
+                desertObject.position.set((Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 15 + Math.random() * 50), 0, -i * roadLength * 2);
+                scene.add(desertObject);
+                desertObjects.push(desertObject);
+            }
+
+            // Create stars with less quantity, smaller size, and slower twinkling, only above a certain height
+            createStars();
+
+            // Create specks for desert simulation
+            createSpecks();
+
+            animate();
+        }
+
+        function createStreetLamp() {
+            const lampGroup = new THREE.Group();
+
+            // Create the vertical pole
+            const poleGeometry = new THREE.BoxGeometry(0.1, lampHeight, 0.1);
+            const poleMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+            pole.position.y = -lampHeight / 2;
+            lampGroup.add(pole);
+
+            // Create the twinkling light (+ and x overlayed)
+            const lightGroup = new THREE.Group();
+
+            const plusGeometry = new THREE.BoxGeometry(0.1, 1, 0.1);
+            const plusVertical = new THREE.Mesh(plusGeometry, poleMaterial);
+            lightGroup.add(plusVertical);
+
+            const plusHorizontal = new THREE.Mesh(plusGeometry, poleMaterial);
+            plusHorizontal.rotation.z = Math.PI / 2;
+            lightGroup.add(plusHorizontal);
+
+            const xGeometry = new THREE.BoxGeometry(0.1, 1, 0.1);
+            const xMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).lerp(new THREE.Color(0xffffe0), Math.random() * 0.5) });
+            const x1 = new THREE.Mesh(xGeometry, xMaterial);
+            x1.rotation.z = Math.PI / 4;
+            lightGroup.add(x1);
+
+            const x2 = new THREE.Mesh(xGeometry, xMaterial);
+            x2.rotation.z = -Math.PI / 4;
+            lightGroup.add(x2);
+
+            lampGroup.add(lightGroup);
+
+            return lampGroup;
+        }
+
+        function createRandomBuilding() {
+            const buildingGroup = new THREE.Group();
+            const floorCount = Math.floor(Math.random() * 5) + 1; // 1 to 5 floors
+            const width = Math.random() * 2 + 1;
+            const depth = Math.random() * 2 + 1;
+
+            for (let i = 0; i < floorCount; i++) {
+                const floorGeometry = new THREE.BoxGeometry(width, 1, depth);
+                const edges = new THREE.EdgesGeometry(floorGeometry); // Create edges geometry for wireframe
+                const wireframe = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+                const solidMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 }); // Black inside
+                const solid = new THREE.Mesh(floorGeometry, solidMaterial);
+                solid.position.y = i;
+                wireframe.position.y = i;
+                buildingGroup.add(solid);
+                buildingGroup.add(wireframe);
+            }
+
+            return buildingGroup;
+        }
+
+        function createDesertObject() {
+            const objectGroup = new THREE.Group();
+            const objectType = Math.random();
+
+            if (objectType < 0.33) {
+                // Create a cactus
+                const cactusGeometry = new THREE.CylinderGeometry(0.2, 0.2, Math.random() * 3 + 1, 8);
+                const cactusMaterial = new THREE.MeshBasicMaterial({ color: 0x228B22 });
+                const cactus = new THREE.Mesh(cactusGeometry, cactusMaterial);
+                objectGroup.add(cactus);
+
+                // Add arms to the cactus
+                if (Math.random() > 0.5) {
+                    const armGeometry = new THREE.CylinderGeometry(0.1, 0.1, Math.random() * 2, 8);
+                    const arm = new THREE.Mesh(armGeometry, cactusMaterial);
+                    arm.position.y = Math.random() * 2;
+                    arm.position.x = Math.random() > 0.5 ? 0.3 : -0.3;
+                    arm.rotation.z = Math.random() > 0.5 ? Math.PI / 4 : -Math.PI / 4;
+                    objectGroup.add(arm);
+                }
+            } else if (objectType < 0.66) {
+                // Create a rock
+                const rockGeometry = new THREE.DodecahedronGeometry(Math.random() * 0.5 + 0.2);
+                const rockMaterial = new THREE.MeshBasicMaterial({ color: 0x808080 });
+                const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+                objectGroup.add(rock);
+            } else {
+                // Create a small shrub
+                const shrubGeometry = new THREE.SphereGeometry(Math.random() * 0.5 + 0.2, 8, 8);
+                const shrubMaterial = new THREE.MeshBasicMaterial({ color: 0x556B2F });
+                const shrub = new THREE.Mesh(shrubGeometry, shrubMaterial);
+                objectGroup.add(shrub);
+            }
+
+            return objectGroup;
+        }
+
+        function createStars() {
+            for (let i = 0; i < 50; i++) {  // Fewer stars
+                const starColor = new THREE.Color(0xffffff).lerp(new THREE.Color(0xffffe0), Math.random() * 0.5);
+                const starMaterial = new THREE.LineBasicMaterial({ color: starColor, transparent: true, opacity: Math.random() });
+
+                const starGeometry = new THREE.BufferGeometry();
+                const positions = [];
+                const starRadius = 0.1 + Math.random() * 0.5;  // Smaller stars
+                const numSpokes = Math.floor(Math.random() * 8) + 5;  // Random number of spokes
+                for (let j = 0; j < numSpokes; j++) {  // Create random spokes
+                    const angle = (j / numSpokes) * Math.PI * 2;
+                    positions.push(0, 0, 0);
+                    positions.push(starRadius * Math.cos(angle), starRadius * Math.sin(angle), 0);
+                }
+                starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+                const star = new THREE.LineSegments(starGeometry, starMaterial);
+                star.position.set(Math.random() * 400 - 200, Math.random() * 180 + 20, Math.random() * -800 - 200);  // Spread out across the whole sky, above a certain height
+                star.userData.twinkleSpeed = Math.random() * 0.005 + 0.001;  // Slower twinkle speed
+
+                scene.add(star);
+                stars.push(star);
+            }
+        }
+
+        function createSpecks() {
+            for (let i = 0; i < speckCount; i++) {  // More specks
+                const speckColor = desertPalette[Math.floor(Math.random() * desertPalette.length)];
+                const speckMaterial = new THREE.MeshBasicMaterial({ color: speckColor });
+                const speckGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+                const speck = new THREE.Mesh(speckGeometry, speckMaterial);
+                speck.position.set((Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 5 + Math.random() * 100), 0, Math.random() * -400);
+
+                speck.userData.colorShiftSpeed = Math.random() * 0.002 + 0.001;  // Speed of color change
+                speck.userData.colorPhase = Math.random() * desertPalette.length;  // Initial color phase
+
+                scene.add(speck);
+                specks.push(speck);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            roadSegments.forEach(segment => {
+                segment.position.z += 0.5;
+
+                if (segment.position.z > camera.position.z) {
+                    segment.position.z -= segmentCount * roadLength;
+                }
+            });
+
+            streetLamps.forEach((lamp, index) => {
+                lamp.position.z += 0.5;
+
+                if (lamp.position.z > camera.position.z) {
+                    lamp.position.z -= segmentCount * lampSpacing;
+                }
+
+                // Twinkle effect
+                const lightGroup = lamp.children[1];
+                lightGroup.children[2].scale.y = Math.sin(index * twinkleSpeed + Date.now() * 0.005) * 0.5 + 0.5;
+                lightGroup.children[3].scale.y = Math.cos(index * twinkleSpeed + Date.now() * 0.005) * 0.5 + 0.5;
+            });
+
+            buildings.forEach(building => {
+                building.position.z += 0.5;
+
+                if (building.position.z > camera.position.z) {
+                    building.position.z -= segmentCount * roadLength * 2;  // Appear less frequently
+                    building.position.x = (Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 10 + Math.random() * 20);
+                    // Randomize building height and shape again
+                    building.children.forEach(child => building.remove(child));
+                    const newBuilding = createRandomBuilding();
+                    newBuilding.children.forEach(child => building.add(child));
+                }
+            });
+
+            desertObjects.forEach(desertObject => {
+                desertObject.position.z += 0.5;
+
+                if (desertObject.position.z > camera.position.z) {
+                    desertObject.position.z -= segmentCount * roadLength * 2;  // Appear less frequently
+                    desertObject.position.x = (Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 15 + Math.random() * 50);
+                }
+            });
+
+            specks.forEach(speck => {
+                speck.position.z += 0.5;
+
+                if (speck.position.z > camera.position.z) {
+                    speck.position.z -= 400;
+                    speck.position.x = (Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 5 + Math.random() * 100);
+                }
+
+                // Gradual color change for specks within desert palette
+                speck.userData.colorPhase += speck.userData.colorShiftSpeed;
+                const colorIndex = Math.floor(speck.userData.colorPhase) % desertPalette.length;
+                const nextColorIndex = (colorIndex + 1) % desertPalette.length;
+                const colorLerpFactor = speck.userData.colorPhase % 1;
+                speck.material.color.lerpColors(desertPalette[colorIndex], desertPalette[nextColorIndex], colorLerpFactor);
+            });
+
+            stars.forEach(star => {
+                star.position.z += 0.5;
+
+                if (star.position.z > camera.position.z + 50) {
+                    star.position.z -= 500;
+                    star.position.x = Math.random() * 400 - 200;
+                    star.position.y = Math.random() * 180 + 20;  // Ensure stars are generated only in the sky
+                }
+
+                // Twinkle effect
+                star.material.opacity = Math.sin(Date.now() * star.userData.twinkleSpeed) * 0.7 + 0.3;  // Smoother twinkle
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
