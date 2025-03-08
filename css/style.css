@@ -1,0 +1,48 @@
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+    background-color: #000;
+}
+
+canvas {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+#info {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    color: white;
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 5px;
+    max-width: 400px;
+    z-index: 100;
+    transition: opacity 0.5s ease-in-out;
+}
+
+#info h1 {
+    margin-top: 0;
+    font-size: 24px;
+}
+
+#info p {
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+#controls-info {
+    margin-top: 15px;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Hide interface after 5 seconds if no interaction */
+.fade-out {
+    opacity: 0;
+} 

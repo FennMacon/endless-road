@@ -45,7 +45,7 @@
                 new THREE.Color(0xC0C0C0)
             ]
         };
-        const scenes = ['desert', 'forest', 'snowy', 'urban'];
+        const scenes = ['desert', 'forest', 'snowy', 'city'];
         let currentSceneIndex = 0;
         let currentPalette = palettes[scenes[currentSceneIndex]];
 
@@ -260,11 +260,11 @@
                     const snow = new THREE.Mesh(snowGeometry, snowMaterial);
                     objectGroup.add(snow);
                     break;
-                case 'urban':
-                    const urbanObjectGeometry = new THREE.BoxGeometry(Math.random() * 2 + 1, Math.random() * 5 + 2, Math.random() * 2 + 1);
-                    const urbanObjectMaterial = new THREE.MeshBasicMaterial({ color: 0x808080 });
-                    const urbanObject = new THREE.Mesh(urbanObjectGeometry, urbanObjectMaterial);
-                    objectGroup.add(urbanObject);
+                case 'city':
+                    const cityObjectGeometry = new THREE.BoxGeometry(Math.random() * 2 + 1, Math.random() * 5 + 2, Math.random() * 2 + 1);
+                    const cityObjectMaterial = new THREE.MeshBasicMaterial({ color: 0x808080 });
+                    const cityObject = new THREE.Mesh(cityObjectGeometry, cityObjectMaterial);
+                    objectGroup.add(cityObject);
                     break;
             }
 
