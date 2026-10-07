@@ -930,6 +930,8 @@ function applyControlChange(key) {
             roadSegments = [];
             leftEdgeLine = rightEdgeLine = leftYellowLine = rightYellowLine = null;
             if (DEBUG.toggles.showRoad.value) createRoad();
+            createSpecks();
+            createDesertObjects();
             break;
         case 'showBuildings': case 'buildingDensity': createBuildings(); break;
         case 'showStreetLamps': createStreetLamps(); break;
@@ -1174,10 +1176,18 @@ function createDesertGround() {
 let speckMesh;
 const speckTransform = new THREE.Object3D();
 
+// Reserve the road corridor only while the road is visible.
+function groundObjectX(spread, side = Math.random() < 0.5 ? -1 : 1) {
+    const clearance = roadWidth / 2 + 5;
+    return DEBUG.toggles.showRoad.value
+        ? side * (clearance + Math.random() * spread)
+        : (Math.random() * 2 - 1) * (clearance + spread);
+}
+
 function resetSpeck(index, z) {
     const side = Math.random() < 0.5 ? -1 : 1;
     specks[index] = new THREE.Vector3(
-        side * (roadWidth / 2 + 5 + Math.random() * 200), 0, z
+        groundObjectX(200, side), 0, z
     );
     const palette = isSceneTransitioning && Math.random() < sceneTransitionProgress * 1.5
         ? palettes[scenes[nextSceneIndex]] : palettes[scenes[currentSceneIndex]];
@@ -1464,11 +1474,11 @@ function createDesertObjects(preserveExisting = false) {
     // Create new objects
     for (let i = 0; i < objectCount; i++) {
         const side = i % 2 === 0 ? -1 : 1;
-        const distance = roadWidth / 2 + 5 + Math.random() * 100;
+        const x = groundObjectX(100, side);
         const z = camera.position.z - 400 + Math.random() * 800;
         
         const object = sceneObjects[scenes[currentSceneIndex]].createObject();
-        object.position.set(side * distance, 0, z);
+        object.position.set(x, 0, z);
         object.userData = {
             scene: scenes[currentSceneIndex]
         };
@@ -2001,8 +2011,7 @@ function animateDesertObjects() {
             newObject.position.z = camera.position.z - 400 + Math.random() * 50;
             
             const sign = object.position.x < 0 ? -1 : 1;
-            const distance = roadWidth / 2 + 5 + Math.random() * 100;
-            newObject.position.x = sign * distance;
+            newObject.position.x = groundObjectX(100, sign);
             
             newObject.userData = {
                 scene: scenes[currentSceneIndex]
@@ -2393,8 +2402,7 @@ function updateSceneTransition() {
         newObject.position.z = camera.position.z - 400 - Math.random() * 200; // Place further back
         
         const side = Math.random() < 0.5 ? -1 : 1;
-        const distance = roadWidth / 2 + 5 + Math.random() * 100;
-        newObject.position.x = side * distance;
+        newObject.position.x = groundObjectX(100, side);
         
         newObject.userData = {
             scene: scenes[nextSceneIndex]
