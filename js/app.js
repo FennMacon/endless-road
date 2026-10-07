@@ -2005,7 +2005,11 @@ function updateSceneryFade(object, retiring = false) {
         materials.forEach(material => {
             material.userData.originalOpacity ??= material.opacity;
             material.opacity = material.userData.originalOpacity * enter * exit * lighting;
-            material.depthWrite = enter * exit >= 1 ? (material.userData.originalDepthWrite ?? material.depthWrite) : false;
+            // Distant translucent scenery keeps the same depth behavior through
+            // the fade endpoint; switching it there makes faces and edges snap.
+            material.depthWrite = !object.userData.type && enter * exit >= 1
+                ? (material.userData.originalDepthWrite ?? material.depthWrite)
+                : false;
         });
     });
 }
