@@ -853,8 +853,9 @@ function addToggles(container, toggles) {
         gap: 8px;
     `;
 
-    Object.entries(DEBUG.toggles).forEach(([key, config]) => {
-        if (!toggles.includes(key)) return;
+    toggles.forEach(key => {
+        const config = DEBUG.toggles[key];
+        if (!config) return;
 
         const row = document.createElement('label');
         row.style.cssText = `
@@ -925,20 +926,30 @@ function addToggles(container, toggles) {
 function applyControlChange(key) {
     switch (key) {
         case 'showRoad':
-            roadSegments.forEach(removeScenery);
-            [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(removeScenery);
-            roadSegments = [];
-            leftEdgeLine = rightEdgeLine = leftYellowLine = rightYellowLine = null;
-            if (DEBUG.toggles.showRoad.value) createRoad();
-            createSpecks();
-            createDesertObjects();
+            if (DEBUG.toggles.showRoad.value) {
+                roadSegments.forEach(removeScenery);
+                [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(removeScenery);
+                roadSegments = [];
+                createRoad();
+            } else {
+                // Keep the visible stretch, then let its far end pass the camera.
+                roadSegments.forEach(road => {
+                    road.scale.y = 450 / totalRoadLength;
+                    road.position.z = camera.position.z - 175;
+                });
+                [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
+                    if (line) { line.scale.z = 450 / totalRoadLength; line.position.z = camera.position.z - 175; }
+                });
+            }
             break;
-        case 'showBuildings': case 'buildingDensity': createBuildings(); break;
-        case 'showStreetLamps': createStreetLamps(); break;
-        case 'showMountains': createMountains(); break;
-        case 'showSceneObjects': case 'objectDensity': createDesertObjects(); break;
-        case 'showSpecks': case 'speckCount': createSpecks(); break;
-        case 'showStars': case 'starCount': case 'starSize': case 'starSpread':
+        case 'showBuildings': case 'showStreetLamps': case 'showMountains':
+        case 'showSceneObjects': case 'showSpecks': case 'showStars':
+            // Animation keeps moving existing objects; only replenishment stops.
+            break;
+        case 'buildingDensity': createBuildings(); break;
+        case 'objectDensity': createDesertObjects(); break;
+        case 'speckCount': createSpecks(); break;
+        case 'starCount': case 'starSize': case 'starSpread':
         case 'starDistance': case 'starTwinkleSpeed': createStars(); break;
         case 'showFPS':
             if (DEBUG.toggles.showFPS.value && !stats) initStats();
@@ -1010,7 +1021,7 @@ function init() {
         
         // Initialize camera
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(5, 5, 0); // Changed from (5, 5, 20) to position camera at start of road
+        camera.position.set(2, 2.5, 0);
         cameraTarget = new THREE.Vector3(0, 0, -40); // Adjusted to keep the same viewing angle
         camera.lookAt(cameraTarget);
         console.log('Camera initialized successfully');
@@ -1186,8 +1197,10 @@ function groundObjectX(spread, side = Math.random() < 0.5 ? -1 : 1) {
 
 const speckFieldLength = 450;
 const speckRearOffset = 50;
+let activeSpecks = [];
 
 function resetSpeck(index, z) {
+    activeSpecks[index] = true;
     const side = Math.random() < 0.5 ? -1 : 1;
     specks[index] = new THREE.Vector3(
         groundObjectX(200, side), 0, z
@@ -1199,7 +1212,7 @@ function resetSpeck(index, z) {
 
 function updateSpeckTransform(index) {
     speckTransform.position.copy(specks[index]);
-    speckTransform.scale.setScalar(DEBUG.variables.speckSize.value / 0.5);
+    speckTransform.scale.setScalar(activeSpecks[index] ? DEBUG.variables.speckSize.value / 0.5 : 0);
     speckTransform.updateMatrix();
     speckMesh.setMatrixAt(index, speckTransform.matrix);
 }
@@ -1208,6 +1221,7 @@ function createSpecks() {
     removeScenery(speckMesh);
     speckMesh = null;
     specks = [];
+    activeSpecks = [];
     if (!DEBUG.toggles.showSpecks.value) return;
     const count = Math.max(0, Math.floor(DEBUG.variables.speckCount.value));
     if (!count) return;
@@ -1305,72 +1319,45 @@ function createRoad() {
     scene.add(rightYellowLine);
 }
 
+const lampStyles = {
+    desert: { height: 5, pole: 0x705A43, glow: 0xFFAD55, shape: 'box' },
+    forest: { height: 4.5, pole: 0x3E5144, glow: 0xFFE6A0, shape: 'lantern' },
+    snowy: { height: 5.5, pole: 0x869BA6, glow: 0xBEEAFF, shape: 'globe' },
+    city: { height: 6, pole: 0x495565, glow: 0xE3EFFF, shape: 'box' }
+};
+
+function createStreetLamp(sceneName = scenes[currentSceneIndex]) {
+    const style = lampStyles[sceneName];
+    const lamp = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({color: style.pole});
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, style.height, 8), material);
+    pole.position.y = style.height / 2;
+    lamp.add(pole);
+    const geometry = style.shape === 'globe' ? new THREE.SphereGeometry(0.45, 12, 8)
+        : style.shape === 'lantern' ? new THREE.CylinderGeometry(0.25, 0.4, 0.8, 6)
+        : new THREE.BoxGeometry(sceneName === 'city' ? 1.5 : 1, 0.3, 0.6);
+    const head = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: style.glow}));
+    head.position.y = style.height;
+    lamp.add(head);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.65, 12, 8),
+        new THREE.MeshBasicMaterial({color: style.glow, transparent: true, opacity: 0.25, depthWrite: false}));
+    glow.position.y = style.height;
+    lamp.add(glow);
+    const light = new THREE.PointLight(style.glow, 0, 15);
+    light.position.y = style.height;
+    lamp.add(light);
+    lamp.userData = {scene: sceneName, glow, light};
+    startSceneryFade(lamp);
+    return lamp;
+}
+
 function createStreetLamps() {
     streetLamps.forEach(removeScenery);
     streetLamps = [];
     if (!DEBUG.toggles.showStreetLamps.value) return;
-
-    // Create street lamps along the road
-    const lampCount = 10;
-    const lampSpacing = roadLength * 4;
-    
-    for (let i = 0; i < lampCount; i++) {
-        const lamp = new THREE.Group();
-        
-        // Lamp post
-        const postGeometry = new THREE.CylinderGeometry(0.2, 0.2, 5, 8);
-        const postMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
-        const post = new THREE.Mesh(postGeometry, postMaterial);
-        post.position.y = 2.5;
-        lamp.add(post);
-        
-        // Lamp head
-        const headGeometry = new THREE.BoxGeometry(1, 0.5, 1);
-        const headMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
-        const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 5;
-        lamp.add(head);
-        
-        // Create downward-facing glow using hemispheres
-        const glowGeometry = new THREE.SphereGeometry(0.7, 16, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
-        const glowMaterial = new THREE.MeshBasicMaterial({
-            color: 0xFF7F00,
-            transparent: true,
-            opacity: 0.4,
-            side: THREE.DoubleSide
-        });
-        const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-        glow.position.y = 4.75;
-        lamp.add(glow);
-        
-        // Slightly larger outer glow
-        const outerGlowGeometry = new THREE.SphereGeometry(1, 16, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
-        const outerGlowMaterial = new THREE.MeshBasicMaterial({
-            color: 0xFF9F00,
-            transparent: true,
-            opacity: 0.2,
-            side: THREE.DoubleSide
-        });
-        const outerGlow = new THREE.Mesh(outerGlowGeometry, outerGlowMaterial);
-        outerGlow.position.y = 4.75;
-        lamp.add(outerGlow);
-        
-        // Lamp light - orange point light positioned to shine downward
-        const light = new THREE.PointLight(0xFF7F00, 1, 15);
-        light.position.y = 4.75;
-        lamp.add(light);
-        
-        // Position lamp along the road
-        lamp.position.z = -i * lampSpacing;
-        lamp.position.x = (i % 2 === 0) ? -roadWidth / 2 - 2 : roadWidth / 2 + 2;
-        
-        // Store reference to glow objects for animation
-        lamp.userData = {
-            glow: glow,
-            outerGlow: outerGlow,
-            light: light
-        };
-        
+    for (let i = 0; i < 10; i++) {
+        const lamp = createStreetLamp();
+        lamp.position.set((i % 2 === 0 ? -1 : 1) * (roadWidth / 2 + 2), 0, camera.position.z - i * 40);
         scene.add(lamp);
         streetLamps.push(lamp);
     }
@@ -1425,20 +1412,22 @@ function createRandomBuilding() {
     const floors = 2 + Math.floor(Math.random() * 4);
     const depth = 5 + Math.random() * 6;
     const height = floors * 3;
+    const colors = [0xB8D4DC, 0xDCC5AB, 0xB5CDB5, 0xC8BCDB, 0xD9B6B0, 0xCFD5C7];
+    const tint = new THREE.Color(colors[Math.floor(Math.random() * colors.length)]);
     const wallMaterial = new THREE.MeshBasicMaterial({
-        color: 0x9CAAB3,
+        color: tint,
         transparent: true,
         opacity: 0.12,
         depthWrite: false
     });
     const edgeMaterial = new THREE.LineBasicMaterial({
-        color: 0xD6DFDF,
+        color: tint.clone().lerp(new THREE.Color(0xFFFFFF), 0.3),
         transparent: true,
         opacity: 0.65,
         depthWrite: false
     });
     const frameMaterial = new THREE.LineBasicMaterial({
-        color: 0xB0C5CC,
+        color: tint,
         transparent: true,
         opacity: 0.3,
         depthWrite: false
@@ -1724,9 +1713,7 @@ function animateStars() {
         
         // Calculate target opacity based on time of day
         let targetOpacity = 0;
-        if (!DEBUG.toggles.showStars.value) {
-            targetOpacity = 0;
-        } else {
+        {
             if (dayFactor <= 0.3) {
                 targetOpacity = 0.7; // Full brightness during deep night
             } else if (dayFactor < 0.7) {
@@ -1816,7 +1803,7 @@ function animateStars() {
                 const adjustedCameraZ = camera.position.z + 20; // Add 20 to emulate original camera z-position
                 
                 positions[i] += adjustedCameraX * movementSpeed * 0.1 * frameScale;
-                positions[i + 2] += adjustedCameraZ * movementSpeed * 0.1 * frameScale;
+                positions[i + 2] += (adjustedCameraZ * 0.1 + speed) * movementSpeed * frameScale;
                 
                 // Ensure stars maintain minimum height
                 if (positions[i + 1] < minStarHeight) {
@@ -1841,7 +1828,7 @@ function animateStars() {
                 }
     
                 // Reset position if too far from original and generate new star position
-                if (Math.abs(positions[i]) > 2000 || Math.abs(positions[i + 2]) > 2000) {
+                if (DEBUG.toggles.showStars.value && (Math.abs(positions[i]) > 2000 || Math.abs(positions[i + 2]) > 2000)) {
                     const radius = 800 + Math.random() * 200;
                     const phi = Math.random() * Math.PI * 2;
                     
@@ -1864,9 +1851,9 @@ function animateStars() {
                 const luminosity = 0.5 + 0.5 * twinkle;
                 
                 // Apply luminosity to RGB values
-                colors[i] = luminosity;     // R
-                colors[i + 1] = luminosity; // G
-                colors[i + 2] = luminosity; // B
+                colors[i] = !DEBUG.toggles.showStars.value && starZ > camera.position.z + 50 ? 0 : luminosity;     // R
+                colors[i + 1] = colors[i]; // G
+                colors[i + 2] = colors[i]; // B
             }
             
             // Adjust star size based on average distance from camera
@@ -1943,39 +1930,23 @@ function animateStars() {
 }
 
 function animateStreetLamps() {
-    // If street lamps array is empty and toggle is on, create initial lamps
-    if (streetLamps.length === 0 && DEBUG.toggles.showStreetLamps.value) {
-        createStreetLamps();
-        return;
-    }
-
-    streetLamps.forEach((lamp, index) => {
-        if (!lamp) return;
-        
+    if (!streetLamps.length && DEBUG.toggles.showStreetLamps.value) createStreetLamps();
+    streetLamps = streetLamps.map(lamp => {
         lamp.position.z += speed * frameScale;
-        
         if (lamp.position.z > camera.position.z + 10) {
-            if (!DEBUG.toggles.showStreetLamps.value) {
-                // Remove lamp when it passes behind camera if toggle is off
-                scene.remove(lamp);
-                streetLamps[index] = null;
-                return;
-            }
-            
-            lamp.position.z = camera.position.z - 400 + Math.random() * 50;
-            
-            // Keep on same side of road
-            const keepOnSameSide = lamp.position.x < 0 ? -1 : 1;
-            lamp.position.x = keepOnSameSide * (roadWidth / 2 + 2);
+            if (!DEBUG.toggles.showStreetLamps.value) { removeScenery(lamp); return null; }
+            const x = lamp.position.x;
+            removeScenery(lamp);
+            const sceneName = scenes[isSceneTransitioning && Math.random() < sceneTransitionProgress ? nextSceneIndex : currentSceneIndex];
+            lamp = createStreetLamp(sceneName);
+            lamp.position.set(x, 0, camera.position.z - 400 + Math.random() * 50);
+            scene.add(lamp);
         }
-        
-        // Update lamp light based on time of day
-        const dayFactor = Math.max(0, Math.sin(-dayNightCycle + Math.PI));
-        const lampLight = lamp.children.find(child => child instanceof THREE.PointLight);
-        if (lampLight) {
-            lampLight.intensity = Math.max(0, 0.8 - dayFactor);
-        }
-    });
+        updateSceneryFade(lamp);
+        const day = Math.max(0, Math.sin(dayNightCycle));
+        lamp.userData.light.intensity = Math.max(0, 0.8 - day) * THREE.MathUtils.smoothstep(lamp.userData.fadeAge, 0, sceneryFadeDuration);
+        return lamp;
+    }).filter(Boolean);
 }
 
 const sceneryFadeDuration = 2500;
@@ -2058,21 +2029,21 @@ function animateBuildings() {
         }
         updateSceneryFade(buildings[index]);
     });
+    buildings = buildings.filter(Boolean);
 }
 
 function animateDesertObjects() {
-    if (!DEBUG.toggles.showSceneObjects.value) return;
     const additions = [];
     const keep = [];
     const targetScene = scenes[isSceneTransitioning ? nextSceneIndex : currentSceneIndex];
-    const targetEnabled = DEBUG.sceneObjectsState[targetScene];
+    const targetEnabled = DEBUG.toggles.showSceneObjects.value && DEBUG.sceneObjectsState[targetScene];
     const targetCount = DEBUG.variables.objectDensity.value;
     let activeCount = desertObjects.filter(object => object.userData.retireAge === undefined).length;
     for (const object of desertObjects) {
         object.position.z += speed * frameScale;
         const oldScene = object.userData.scene !== targetScene;
         const shouldRetire = oldScene && (!isSceneTransitioning || sceneTransitionProgress >= (object.userData.retireAt ?? 1));
-        if (object.userData.retireAge === undefined && (shouldRetire || !DEBUG.sceneObjectsState[object.userData.scene])) {
+        if (targetEnabled && object.userData.retireAge === undefined && shouldRetire) {
             object.userData.retireAge = 0;
             activeCount--;
         }
@@ -2192,6 +2163,7 @@ function animateMountains() {
         }
         if (mountains[index]) updateSceneryFade(mountains[index]);
     });
+    mountains = mountains.filter(Boolean);
 }
 
 let lastFrameTime;
@@ -2473,7 +2445,17 @@ function easeInOutCubic(x) {
 
 function animateRoad() {
     if (!DEBUG.toggles.showRoad.value) {
-        return; // Road is immediately removed when toggled off
+        roadSegments.forEach(road => road.position.z += speed * frameScale);
+        [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
+            if (line) line.position.z += speed * frameScale;
+        });
+        if (roadSegments.length && roadSegments[0].position.z - 225 > camera.position.z + 50) {
+            roadSegments.forEach(removeScenery);
+            [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(removeScenery);
+            roadSegments = [];
+            leftEdgeLine = rightEdgeLine = leftYellowLine = rightYellowLine = null;
+        }
+        return;
     }
 
     // If toggle is on and road elements don't exist, recreate them
@@ -2509,25 +2491,24 @@ function animateRoad() {
 }
 
 function animateSpecks() {
-    if (!DEBUG.toggles.showSpecks.value) {
-        if (speckMesh) {
-            removeScenery(speckMesh);
-            speckMesh = null;
-            specks = [];
-        }
-        return;
-    }
+    const enabled = DEBUG.toggles.showSpecks.value;
     const count = Math.max(0, Math.floor(DEBUG.variables.speckCount.value));
-    if (specks.length !== count) createSpecks();
+    if (enabled && specks.length !== count) createSpecks();
     if (!speckMesh) return;
     let colorsChanged = false;
     for (let i = 0; i < specks.length; i++) {
+        if (!activeSpecks[i]) {
+            if (!enabled) continue;
+            resetSpeck(i, camera.position.z - 400 + Math.random() * speckFieldLength);
+            colorsChanged = true;
+        }
         specks[i].z += speed * frameScale;
         const front = camera.position.z + speckRearOffset - speckFieldLength;
         const relativeZ = specks[i].z - front;
         if (relativeZ < 0 || relativeZ >= speckFieldLength) {
             // Wrap in either direction, preserving overshoot and particle spacing.
-            resetSpeck(i, front + ((relativeZ % speckFieldLength) + speckFieldLength) % speckFieldLength);
+            if (enabled) resetSpeck(i, front + ((relativeZ % speckFieldLength) + speckFieldLength) % speckFieldLength);
+            else activeSpecks[i] = false;
             colorsChanged = true;
         }
         updateSpeckTransform(i);
@@ -2556,7 +2537,8 @@ function createClouds() {
             const material = new THREE.MeshBasicMaterial({
                 color: 0xFFFFFF,
                 transparent: true,
-                opacity: 0.6
+                opacity: 0.6,
+                depthWrite: false
             });
             const particle = new THREE.Mesh(geometry, material);
             
@@ -2586,6 +2568,7 @@ function createClouds() {
             originalX: cloud.position.x
         };
         
+        startSceneryFade(cloud);
         scene.add(cloud);
         clouds.push(cloud);
     }
@@ -2604,12 +2587,14 @@ function animateClouds() {
             cloud.position.z = camera.position.z - 600 - Math.random() * 200;
             cloud.userData.originalX = (Math.random() - 0.5) * 400;
             cloud.position.x = cloud.userData.originalX;
+            startSceneryFade(cloud);
         }
         
+        updateSceneryFade(cloud);
         // Adjust opacity based on day/night cycle
         cloud.children.forEach(particle => {
             const dayFactor = (Math.sin(dayNightCycle) + 1) / 2;
-            particle.material.opacity = 0.3 + dayFactor * 0.3;
+            particle.material.opacity *= (0.3 + dayFactor * 0.3) / 0.6;
         });
     });
 }
@@ -2660,7 +2645,7 @@ function setupEventListeners() {
             
             // Reset camera with ESC key
             if (e.key === 'Escape') {
-                camera.position.set(5, 5, 0); // Changed from (5, 5, 20) to position camera at start of road
+                camera.position.set(2, 2.5, 0);
                 cameraTarget = new THREE.Vector3(0, 0, -40); // Adjusted to keep the same viewing angle
                 camera.lookAt(cameraTarget);
                 log('Camera position reset', 'info');
@@ -2785,9 +2770,13 @@ if (typeof module !== 'undefined') {
 // Add new function to create visibility section
 function createVisibilitySection() {
     const section = document.createElement('div');
+    const hint = document.createElement('p');
+    hint.textContent = 'Turn a switch off to stop new spawns. Existing scenery stays until you pass it.';
+    hint.style.cssText = 'font-size: 12px; line-height: 1.5; opacity: 0.75; margin: 0 0 12px;';
+    section.appendChild(hint);
     
     // Add main object toggles
-    const mainToggles = ['showRoad', 'showStreetLamps', 'showBuildings', 'showMountains', 'showSceneObjects', 'showStars', 'showSpecks'];
+    const mainToggles = ['showRoad', 'showBuildings', 'showStreetLamps', 'showMountains', 'showSceneObjects', 'showStars', 'showSpecks'];
     addToggles(section, mainToggles);
     
     // Add scene-specific object toggles
@@ -2819,7 +2808,6 @@ function createVisibilitySection() {
         
         checkbox.addEventListener('change', (e) => {
             DEBUG.sceneObjectsState[scene] = e.target.checked;
-            createDesertObjects();
             log(`Toggled ${scene} objects to ${e.target.checked}`, 'info');
         });
         
