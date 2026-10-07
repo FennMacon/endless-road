@@ -1184,6 +1184,9 @@ function groundObjectX(spread, side = Math.random() < 0.5 ? -1 : 1) {
         : (Math.random() * 2 - 1) * (clearance + spread);
 }
 
+const speckFieldLength = 450;
+const speckRearOffset = 50;
+
 function resetSpeck(index, z) {
     const side = Math.random() < 0.5 ? -1 : 1;
     specks[index] = new THREE.Vector3(
@@ -1217,7 +1220,7 @@ function createSpecks() {
     // Instances are recycled around the camera; static bounds would be stale.
     speckMesh.frustumCulled = false;
     for (let i = 0; i < count; i++) {
-        resetSpeck(i, camera.position.z - 400 + Math.random() * 400);
+        resetSpeck(i, camera.position.z + speckRearOffset - speckFieldLength + (i + Math.random()) / count * speckFieldLength);
         updateSpeckTransform(i);
     }
     scene.add(speckMesh);
@@ -1408,6 +1411,7 @@ function createBuildings() {
             0,
             -i * (roadLength * 4 / buildingCount) - Math.random() * 50
         );
+        startSceneryFade(building);
         scene.add(building);
         buildings.push(building);
     }
@@ -1483,6 +1487,7 @@ function createDesertObjects(preserveExisting = false) {
             scene: scenes[currentSceneIndex]
         };
         
+        startSceneryFade(object);
         scene.add(object);
         desertObjects.push(object);
     }
@@ -1553,6 +1558,7 @@ function createMountains() {
                     type: isCity ? 'skyscraper' : 'mountain'
                 };
                 
+                startSceneryFade(mountain);
                 scene.add(mountain);
                 mountains.push(mountain);
             } catch (error) {
@@ -1952,6 +1958,47 @@ function animateStreetLamps() {
     });
 }
 
+const sceneryFadeDuration = 2500;
+
+function startSceneryFade(object) {
+    object.userData.fadeAge = 0;
+    object.traverse(child => {
+        const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+        materials.forEach(material => {
+            material.userData.originalOpacity ??= material.opacity;
+            material.userData.originalDepthWrite ??= material.depthWrite;
+            material.transparent = true;
+            material.depthWrite = false;
+            material.opacity = 0;
+        });
+    });
+}
+
+function updateSceneryFade(object, retiring = false) {
+    object.userData.fadeAge = Math.min(sceneryFadeDuration, (object.userData.fadeAge ?? sceneryFadeDuration) + deltaMilliseconds);
+    const enter = THREE.MathUtils.smoothstep(object.userData.fadeAge, 0, sceneryFadeDuration);
+    const exit = retiring ? 1 - THREE.MathUtils.smoothstep(object.userData.retireAge, 0, sceneryFadeDuration) : 1;
+    const dayFactor = Math.max(0, Math.sin(dayNightCycle));
+    const lighting = object.userData.type ? 0.7 + dayFactor * 0.3 : 1;
+    object.traverse(child => {
+        const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+        materials.forEach(material => {
+            material.userData.originalOpacity ??= material.opacity;
+            material.opacity = material.userData.originalOpacity * enter * exit * lighting;
+            material.depthWrite = enter * exit >= 1 ? (material.userData.originalDepthWrite ?? material.depthWrite) : false;
+        });
+    });
+}
+
+function spawnSceneObject(sceneName, z) {
+    const object = sceneObjects[sceneName].createObject();
+    object.position.set(groundObjectX(100), 0, z);
+    object.userData.scene = sceneName;
+    startSceneryFade(object);
+    scene.add(object);
+    return object;
+}
+
 function animateBuildings() {
     // If buildings array is empty and toggle is on, create initial buildings
     if (buildings.length === 0 && DEBUG.toggles.showBuildings.value) {
@@ -1982,58 +2029,47 @@ function animateBuildings() {
             buildings[index] = createRandomBuilding();
             buildings[index].position.x = building.position.x;
             buildings[index].position.z = building.position.z;
+            startSceneryFade(buildings[index]);
             scene.add(buildings[index]);
         }
+        updateSceneryFade(buildings[index]);
     });
 }
 
 function animateDesertObjects() {
-    // If desert objects array is empty and toggle is on, create initial objects
-    if (desertObjects.length === 0 && DEBUG.toggles.showSceneObjects.value) {
-        createDesertObjects();
-        return;
-    }
-
-    const objectsToRemove = [];
-    
-    desertObjects.forEach(object => {
-        if (!object) return;
-        
+    if (!DEBUG.toggles.showSceneObjects.value) return;
+    const additions = [];
+    const keep = [];
+    const targetScene = scenes[isSceneTransitioning ? nextSceneIndex : currentSceneIndex];
+    const targetEnabled = DEBUG.sceneObjectsState[targetScene];
+    const targetCount = DEBUG.variables.objectDensity.value;
+    let activeCount = desertObjects.filter(object => object.userData.retireAge === undefined).length;
+    for (const object of desertObjects) {
         object.position.z += speed * frameScale;
-        
-        if (object.position.z > camera.position.z + 10) {
-            if (!DEBUG.toggles.showSceneObjects.value || !DEBUG.sceneObjectsState[scenes[currentSceneIndex]] || object.userData.scene !== scenes[currentSceneIndex]) {
-                objectsToRemove.push(object);
-                return;
-            }
-            
-            const newObject = sceneObjects[scenes[currentSceneIndex]].createObject();
-            newObject.position.z = camera.position.z - 400 + Math.random() * 50;
-            
-            const sign = object.position.x < 0 ? -1 : 1;
-            newObject.position.x = groundObjectX(100, sign);
-            
-            newObject.userData = {
-                scene: scenes[currentSceneIndex]
-            };
-            
+        const oldScene = object.userData.scene !== targetScene;
+        const shouldRetire = oldScene && (!isSceneTransitioning || sceneTransitionProgress >= (object.userData.retireAt ?? 1));
+        if (object.userData.retireAge === undefined && (shouldRetire || !DEBUG.sceneObjectsState[object.userData.scene])) {
+            object.userData.retireAge = 0;
+            activeCount--;
+        }
+        if (object.userData.retireAge !== undefined) object.userData.retireAge += deltaMilliseconds;
+        if (object.position.z > camera.position.z + 10 || object.userData.retireAge >= sceneryFadeDuration) {
+            if (object.userData.retireAge === undefined) activeCount--;
             removeScenery(object);
-            scene.add(newObject);
-            
-            const index = desertObjects.indexOf(object);
-            if (index !== -1) {
-                desertObjects[index] = newObject;
-            }
+        } else {
+            updateSceneryFade(object, object.userData.retireAge !== undefined);
+            keep.push(object);
         }
-    });
-    
-    objectsToRemove.forEach(object => {
-        removeScenery(object);
-        const index = desertObjects.indexOf(object);
-        if (index !== -1) {
-            desertObjects.splice(index, 1);
+    }
+    // Retiring objects may overlap their replacements briefly, but the live
+    // population stays at the configured count and drains after each transition.
+    const spawnScene = isSceneTransitioning ? targetScene : scenes[currentSceneIndex];
+    if (targetEnabled) {
+        for (let i = activeCount; i < targetCount; i++) {
+            additions.push(spawnSceneObject(spawnScene, camera.position.z - 400 + Math.random() * 100));
         }
-    });
+    }
+    desertObjects = keep.concat(additions);
 }
 
 function animateMountains() {
@@ -2068,7 +2104,9 @@ function animateMountains() {
                     createDistantMountainRange(mountain, currentScene);
                 }
                 mountain.userData.scene = currentScene;
+                startSceneryFade(mountain);
             }
+            updateSceneryFade(mountain);
             return;
         }
 
@@ -2115,6 +2153,7 @@ function animateMountains() {
                     type: isCity ? 'skyscraper' : 'mountain'
                 };
                 
+                startSceneryFade(newMountain);
                 scene.add(newMountain);
                 mountains[index] = newMountain;
                 
@@ -2127,6 +2166,7 @@ function animateMountains() {
                 mountains[index] = null;
             }
         }
+        if (mountains[index]) updateSceneryFade(mountains[index]);
     });
 }
 
@@ -2360,6 +2400,10 @@ function startSceneTransition(targetIndex = (currentSceneIndex + 1) % scenes.len
     isSceneTransitioning = true;
     sceneTransitionProgress = 0;
     nextSceneIndex = targetIndex;
+    desertObjects.forEach(object => {
+        // Spread retirement through the whole transition, including at zero speed.
+        object.userData.retireAt = Math.random();
+    });
     console.log(`Starting transition from ${scenes[currentSceneIndex]} to ${scenes[nextSceneIndex]}`);
     
 
@@ -2374,7 +2418,6 @@ function updateSceneTransition() {
         lastSceneChangeTime = Date.now();
         sceneTransitionProgress = 0;
         
-        createDesertObjects();
         return;
     }
     
@@ -2396,21 +2439,7 @@ function updateSceneTransition() {
     scene.fog.color.copy(currentSkyColor).lerp(nextSkyColor, eased);
     scene.background.copy(currentSkyColor).lerp(nextSkyColor, eased);
     
-    // Gradually create new scene objects during transition
-    if (DEBUG.toggles.showSceneObjects.value && DEBUG.sceneObjectsState[scenes[nextSceneIndex]] && desertObjects.length < DEBUG.variables.objectDensity.value && Math.random() < 1 - Math.pow(0.9, frameScale)) { // Rate normalized to 60 FPS to create a new object
-        const newObject = sceneObjects[scenes[nextSceneIndex]].createObject();
-        newObject.position.z = camera.position.z - 400 - Math.random() * 200; // Place further back
-        
-        const side = Math.random() < 0.5 ? -1 : 1;
-        newObject.position.x = groundObjectX(100, side);
-        
-        newObject.userData = {
-            scene: scenes[nextSceneIndex]
-        };
-        
-        scene.add(newObject);
-        desertObjects.push(newObject);
-    }
+
 }
 
 // Add easing function for smoother transitions
@@ -2470,8 +2499,11 @@ function animateSpecks() {
     let colorsChanged = false;
     for (let i = 0; i < specks.length; i++) {
         specks[i].z += speed * frameScale;
-        if (specks[i].z > camera.position.z + 50) {
-            resetSpeck(i, camera.position.z - 400);
+        const front = camera.position.z + speckRearOffset - speckFieldLength;
+        const relativeZ = specks[i].z - front;
+        if (relativeZ < 0 || relativeZ >= speckFieldLength) {
+            // Wrap in either direction, preserving overshoot and particle spacing.
+            resetSpeck(i, front + ((relativeZ % speckFieldLength) + speckFieldLength) % speckFieldLength);
             colorsChanged = true;
         }
         updateSpeckTransform(i);
@@ -3635,6 +3667,7 @@ function createHorizonPlanes(isCity) {
             side: side
         };
         
+        startSceneryFade(horizonGroup);
         scene.add(horizonGroup);
         mountains.push(horizonGroup);
     }
