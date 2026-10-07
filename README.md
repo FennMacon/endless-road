@@ -32,6 +32,10 @@ elapsed time so their speed stays consistent across different refresh rates.
 
 ## Controls
 
+- **Ambient mode button**: Hide the overlay; tap or click the screen to restore it
+- **Controls button**: Open or close the settings on mobile and desktop
+- **Backtick (`)**: Toggle the controls panel
+
 - **WASD/Arrow Keys**: Move camera
 - **Mouse Drag**: Look around (OrbitControls)
 - **N Key**: Toggle between day and night

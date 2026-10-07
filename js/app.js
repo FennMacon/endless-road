@@ -461,6 +461,7 @@ function log(message, type = 'info') {
 function createDebugMenu() {
     const debugContainer = document.createElement('div');
     debugContainer.id = 'debug-container';
+    debugContainer.setAttribute('aria-label', 'Scene controls');
     debugContainer.style.cssText = `
         position: fixed;
         top: 0;
@@ -592,6 +593,29 @@ function createDebugMenu() {
     flexContainer.appendChild(content);
     debugContainer.appendChild(flexContainer);
     document.body.appendChild(debugContainer);
+    document.getElementById('controls-toggle').addEventListener('click', toggleControls);
+    document.getElementById('ambient-toggle').addEventListener('click', () => {
+        document.body.classList.add('ambient-mode');
+        document.activeElement?.blur();
+    });
+    // Capture the first click so waking the overlay cannot activate a control
+    // that was hidden underneath the tap. Touch taps also generate clicks.
+    document.addEventListener('click', event => {
+        if (!document.body.classList.contains('ambient-mode')) return;
+        document.body.classList.remove('ambient-mode');
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, true);
+}
+
+function toggleControls() {
+    document.body.classList.remove('ambient-mode');
+    const menu = document.getElementById('debug-container');
+    const button = document.getElementById('controls-toggle');
+    const open = menu.style.display === 'none';
+    menu.style.display = open ? 'flex' : 'none';
+    button.textContent = open ? 'Close controls' : 'Controls';
+    button.setAttribute('aria-expanded', String(open));
 }
 
 // Helper functions to create each section
@@ -2536,6 +2560,7 @@ function initStats() {
     }
     
     stats = new Stats();
+    stats.dom.classList.add('fps-overlay');
     stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
     document.body.appendChild(stats.dom);
     return stats;
@@ -2553,9 +2578,7 @@ function setupEventListeners() {
             // Toggle debug menu with backtick
             if (e.key === '`' || e.key === '~') {
                 e.preventDefault();
-                if (DEBUG.menu) {
-                    DEBUG.menu.style.display = DEBUG.menu.style.display === 'none' ? 'flex' : 'none';
-                }
+                toggleControls();
             }
             
             // Toggle day/night with 'n' key

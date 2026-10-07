@@ -46,3 +46,73 @@ canvas {
 .fade-out {
     opacity: 0;
 } 
+
+#controls-toggle,
+#ambient-toggle {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 1001;
+    min-height: 44px;
+    padding: 10px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.75);
+    color: white;
+    font: inherit;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+#controls-toggle:focus-visible,
+#ambient-toggle:focus-visible {
+    outline: 2px solid white;
+    outline-offset: 3px;
+}
+
+#debug-container {
+    box-sizing: border-box;
+    padding-top: calc(124px + env(safe-area-inset-top)) !important;
+}
+
+#debug-container > div {
+    box-sizing: border-box;
+    max-height: 100% !important;
+    overscroll-behavior: contain;
+}
+
+@media (max-width: 600px) {
+    #debug-container {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+        padding-bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    }
+
+    #debug-container > div {
+        padding: 12px !important;
+    }
+
+    #debug-container button,
+    #debug-container label {
+        min-height: 44px;
+        box-sizing: border-box;
+    }
+}
+
+
+#ambient-toggle {
+    top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+}
+
+/* Hide the overlay without changing any individual visibility preferences. */
+body.ambient-mode #controls-toggle,
+body.ambient-mode #ambient-toggle,
+body.ambient-mode #debug-container,
+body.ambient-mode .fps-overlay,
+body.ambient-mode #info {
+    display: none !important;
+}
+
+body.ambient-mode {
+    cursor: none;
+}
