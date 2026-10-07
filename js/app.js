@@ -1420,46 +1420,66 @@ function createBuildings() {
 }
 
 function createRandomBuilding() {
-    const width = 5 + Math.random() * 5;
-    const floorCount = Math.floor(3 + Math.random() * 5);
-    const depth = 5 + Math.random() * 5;
-    const totalHeight = floorCount * 3;
-
-    // Create main building geometry
-    const buildingGeometry = new THREE.BoxGeometry(width, totalHeight, depth);
-    const buildingMaterial = new THREE.MeshPhongMaterial({
-        color: 0x808080,
-        shininess: 0
+    const building = new THREE.Group();
+    const width = 5 + Math.random() * 6;
+    const floors = 2 + Math.floor(Math.random() * 4);
+    const depth = 5 + Math.random() * 6;
+    const height = floors * 3;
+    const wallMaterial = new THREE.MeshBasicMaterial({
+        color: 0x9CAAB3,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false
     });
-    const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
-    
-    // Position building with bottom at ground level
-    building.position.y = totalHeight / 2;
-    
-    // Create wireframe with proper position offset
-    const edgesGeometry = new THREE.EdgesGeometry(buildingGeometry);
-    const edgesMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
-    const wireframe = new THREE.LineSegments(edgesGeometry, edgesMaterial);
-    
-    // Add small structure on top (30% chance)
-    if (Math.random() < 0.3) {
-        const topWidth = width * 0.5;
-        const topHeight = 2;
-        const topDepth = depth * 0.5;
-        
-        const topGeometry = new THREE.BoxGeometry(topWidth, topHeight, topDepth);
-        const topMesh = new THREE.Mesh(topGeometry, buildingMaterial);
-        topMesh.position.y = totalHeight / 2 + topHeight / 2;
-        
-        const topEdges = new THREE.EdgesGeometry(topGeometry);
-        const topWireframe = new THREE.LineSegments(topEdges, edgesMaterial);
-        topWireframe.position.copy(topMesh.position);
-        
-        building.add(topMesh);
-        building.add(topWireframe);
+    const edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0xD6DFDF,
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false
+    });
+    const frameMaterial = new THREE.LineBasicMaterial({
+        color: 0xB0C5CC,
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false
+    });
+
+    function addVolume(w, h, d, y) {
+        const geometry = new THREE.BoxGeometry(w, h, d);
+        const walls = new THREE.Mesh(geometry, wallMaterial);
+        walls.position.y = y;
+        const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), edgeMaterial);
+        outline.position.y = y;
+        building.add(walls, outline);
     }
-    
-    building.add(wireframe);
+
+    // A faint shell gives the silhouette depth while the frame defines its shape.
+    addVolume(width, height, depth, height / 2);
+    const frame = [];
+    const line = (x1, y1, z1, x2, y2, z2) => frame.push(x1, y1, z1, x2, y2, z2);
+    const x = width / 2;
+    const z = depth / 2;
+    for (let floor = 1; floor < floors; floor++) {
+        const y = floor * 3;
+        line(-x, y, -z, x, y, -z);
+        line(-x, y, z, x, y, z);
+        line(-x, y, -z, -x, y, z);
+        line(x, y, -z, x, y, z);
+    }
+    // Sparse facade columns avoid the busy triangular look of a mesh wireframe.
+    for (const side of [-1, 1]) {
+        line(0, 0, side * z, 0, height, side * z);
+        line(side * x, 0, 0, side * x, height, 0);
+    }
+    const frameGeometry = new THREE.BufferGeometry();
+    frameGeometry.setAttribute('position', new THREE.Float32BufferAttribute(frame, 3));
+    building.add(new THREE.LineSegments(frameGeometry, frameMaterial));
+
+    // A small setback roof adds variety without competing with the skyscrapers.
+    if (Math.random() < 0.45) {
+        const roofHeight = 1.5 + Math.random();
+        addVolume(width * 0.55, roofHeight, depth * 0.6, height + roofHeight / 2);
+    }
     return building;
 }
 
