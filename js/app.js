@@ -1974,9 +1974,13 @@ function updateSceneryFade(object, retiring = false) {
     const lighting = object.userData.type ? 0.7 + dayFactor * 0.3 : 1;
     object.traverse(child => {
         const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+        let layerWeight = 1;
+        for (let parent = child.parent; parent && parent !== object; parent = parent.parent) {
+            layerWeight *= parent.userData.fadeWeight ?? 1;
+        }
         materials.forEach(material => {
             material.userData.originalOpacity ??= material.opacity;
-            material.opacity = material.userData.originalOpacity * enter * exit * lighting;
+            material.opacity = material.userData.originalOpacity * enter * exit * lighting * layerWeight;
             // Distant translucent scenery keeps the same depth behavior through
             // the fade endpoint; switching it there makes faces and edges snap.
             material.depthWrite = !object.userData.type && enter * exit >= 1
@@ -2089,18 +2093,40 @@ function animateMountains() {
         // into foreground scenery. Refresh it when the environment changes.
         if (mountain.userData.type === 'horizon' && DEBUG.toggles.showMountains.value) {
             mountain.position.z = camera.position.z - 800;
-            const currentScene = scenes[currentSceneIndex];
-            if (mountain.userData.scene !== currentScene) {
-                while (mountain.children.length) {
-                    removeScenery(mountain.children[0]);
+            const targetScene = scenes[isSceneTransitioning ? nextSceneIndex : currentSceneIndex];
+            if (mountain.userData.scene !== targetScene && !mountain.userData.horizonBlend) {
+                const outgoing = new THREE.Group();
+                [...mountain.children].forEach(child => outgoing.add(child));
+                const incoming = new THREE.Group();
+                if (targetScene === 'city') createDistantSkylineSilhouette(incoming);
+                else createDistantMountainRange(incoming, targetScene);
+                incoming.traverse(child => {
+                    if (child.material) {
+                        child.material.userData.originalOpacity = child.material.opacity;
+                        child.material.transparent = true;
+                        child.material.depthWrite = false;
+                    }
+                });
+                incoming.userData.fadeWeight = 0;
+                outgoing.userData.fadeWeight = 1;
+                mountain.add(outgoing, incoming);
+                mountain.userData.horizonBlend = {outgoing, incoming, targetScene, elapsed: 0, duringTransition: isSceneTransitioning};
+            }
+            const blend = mountain.userData.horizonBlend;
+            if (blend) {
+                blend.elapsed += deltaMilliseconds;
+                const progress = isSceneTransitioning
+                    ? easeInOutCubic(sceneTransitionProgress)
+                    : blend.duringTransition ? 1 : THREE.MathUtils.smoothstep(blend.elapsed, 0, sceneryFadeDuration);
+                blend.incoming.userData.fadeWeight = progress;
+                blend.outgoing.userData.fadeWeight = 1 - progress;
+                if (progress >= 1) {
+                    removeScenery(blend.outgoing);
+                    [...blend.incoming.children].forEach(child => mountain.add(child));
+                    mountain.remove(blend.incoming);
+                    mountain.userData.scene = blend.targetScene;
+                    delete mountain.userData.horizonBlend;
                 }
-                if (currentScene === 'city') {
-                    createDistantSkylineSilhouette(mountain);
-                } else {
-                    createDistantMountainRange(mountain, currentScene);
-                }
-                mountain.userData.scene = currentScene;
-                startSceneryFade(mountain);
             }
             updateSceneryFade(mountain);
             return;
@@ -3854,110 +3880,33 @@ function createDistantMountainRange(group, currentScene) {
 
 // Update mountain lighting based on day/night cycle
 function updateMountainLighting(dayFactor) {
-    const currentState = sceneStates[scenes[currentSceneIndex]];
-    const skyColor = currentState.dayColors.sky.clone().lerp(currentState.nightColors.sky, 1 - dayFactor);
-    
-    mountains.forEach(mountain => {
-        if (!mountain || !mountain.userData) return;
-        
-        // Update all materials in the mountain group
-        mountain.traverse((child) => {
-            if (child.isMesh && child.material) {
-                const material = child.material;
-                
-                // Skip if this is a snow cap or icicle (keep them bright)
-                if (material.color && (material.color.getHex() === 0xFFFFFF || material.color.getHex() === 0xE0FFFF)) {
-                    // Apply subtle night dimming to snow/ice
-                    material.opacity = Math.max(0.6, 0.9 - (1 - dayFactor) * 0.3);
-                    return;
-                }
-                
-                // Apply day/night lighting to other materials
-                if (material.color && material.userData && material.userData.originalColor) {
-                    // Restore from stored original color
-                    const originalColor = material.userData.originalColor;
-                    const nightColor = originalColor.clone().multiplyScalar(0.3); // Much darker at night
-                    const currentColor = originalColor.clone().lerp(nightColor, 1 - dayFactor);
-                    
-                    // Add atmospheric perspective based on distance
-                    if (mountain.userData.type === 'horizon') {
-                        currentColor.lerp(skyColor, 0.6); // Strong atmospheric effect for horizon
-                    } else {
-                        const distance = Math.abs(mountain.position.x);
-                        const maxDistance = mountainZoneStart + mountainZoneWidth;
-                        const distanceFactor = Math.min(1, distance / maxDistance);
-                        currentColor.lerp(skyColor, distanceFactor * 0.4);
-                    }
-                    
-                    material.color.copy(currentColor);
-                } else if (material.color) {
-                    // Store original color if not already stored
-                    if (!material.userData) material.userData = {};
-                    if (!material.userData.originalColor) {
-                        material.userData.originalColor = material.color.clone();
-                    }
-                    
-                    // Apply lighting for first time
-                    const originalColor = material.userData.originalColor;
-                    const nightColor = originalColor.clone().multiplyScalar(0.3);
-                    const currentColor = originalColor.clone().lerp(nightColor, 1 - dayFactor);
-                    
-                    // Add atmospheric perspective
-                    if (mountain.userData.type === 'horizon') {
-                        currentColor.lerp(skyColor, 0.6);
-                    } else {
-                        const distance = Math.abs(mountain.position.x);
-                        const maxDistance = mountainZoneStart + mountainZoneWidth;
-                        const distanceFactor = Math.min(1, distance / maxDistance);
-                        currentColor.lerp(skyColor, distanceFactor * 0.4);
-                    }
-                    
-                    material.color.copy(currentColor);
-                }
-                
-                // Adjust opacity for night atmosphere
-                if (material.transparent) {
-                    const baseOpacity = material.userData.originalOpacity || material.opacity;
-                    if (!material.userData.originalOpacity) {
-                        material.userData.originalOpacity = material.opacity;
-                    }
-                    material.opacity = baseOpacity * (0.7 + dayFactor * 0.3); // Slightly more transparent at night
-                }
-            }
-        });
-        
-        // Add special night effects for snow-capped mountains
-        if (mountain.userData.scene === 'snowy' && dayFactor < 0.5) {
-            addMountainMoonlightEffect(mountain, dayFactor);
-        }
-    });
-}
-
-// Add moonlight effects to snowy mountains at night
-function addMountainMoonlightEffect(mountain, dayFactor) {
-    // Only add effect once per mountain
-    if (mountain.userData.hasNightEffect) return;
-    
-    const moonlightIntensity = Math.max(0, 0.5 - dayFactor); // Stronger effect deeper in night
-    
-    // Add subtle blue tint to represent moonlight on snow
-    mountain.traverse((child) => {
-        if (child.isMesh && child.material && child.material.color) {
-            const color = child.material.color;
-            if (color.getHex() === 0xFFFFFF) { // Snow surfaces
-                const moonlightColor = new THREE.Color(0xCCCCFF); // Pale blue
-                const originalColor = color.clone();
-                color.lerp(moonlightColor, moonlightIntensity * 0.3);
-            }
-        }
-    });
-    
-    mountain.userData.hasNightEffect = true;
-    
-    // Remove night effect flag when day returns
-    if (dayFactor > 0.7) {
-        mountain.userData.hasNightEffect = false;
+    const skyFor = index => {
+        const state = sceneStates[scenes[index]];
+        return state.dayColors.sky.clone().lerp(state.nightColors.sky, 1 - dayFactor);
+    };
+    const skyColor = skyFor(currentSceneIndex);
+    if (isSceneTransitioning) {
+        skyColor.lerp(skyFor(nextSceneIndex), easeInOutCubic(sceneTransitionProgress));
     }
+    mountains.forEach(mountain => {
+        mountain.traverse(child => {
+            const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+            materials.forEach(material => {
+                if (!material.color) return;
+                material.userData.originalColor ??= material.color.clone();
+                const original = material.userData.originalColor;
+                const snow = original.getHex() === 0xFFFFFF || original.getHex() === 0xE0FFFF;
+                const color = original.clone().multiplyScalar(snow ? 0.7 + dayFactor * 0.3 : 0.3 + dayFactor * 0.7);
+                if (snow && mountain.userData.scene === 'snowy') {
+                    color.lerp(new THREE.Color(0xCCCCFF), Math.max(0, 0.5 - dayFactor) * 0.3);
+                }
+                const haze = mountain.userData.type === 'horizon' ? 0.6
+                    : Math.min(1, Math.abs(mountain.position.x) / (mountainZoneStart + mountainZoneWidth)) * 0.4;
+                material.color.copy(color.lerp(skyColor, haze));
+                // Opacity is applied once by updateSceneryFade, including layer weights.
+            });
+        });
+    });
 }
 
 // Animation variables
