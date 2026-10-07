@@ -54,10 +54,16 @@ canvas {
     right: max(12px, env(safe-area-inset-right));
     z-index: 1001;
     min-height: 44px;
-    padding: 10px 16px;
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.75);
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.2);
+    opacity: 0.45;
+    transition: opacity 0.2s, background-color 0.2s;
     color: white;
     font: inherit;
     cursor: pointer;
@@ -72,7 +78,7 @@ canvas {
 
 #debug-container {
     box-sizing: border-box;
-    padding-top: calc(124px + env(safe-area-inset-top)) !important;
+    padding-top: calc(72px + env(safe-area-inset-top)) !important;
 }
 
 #debug-container > div {
@@ -101,7 +107,7 @@ canvas {
 
 
 #ambient-toggle {
-    top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+    right: calc(max(12px, env(safe-area-inset-right)) + 52px);
 }
 
 /* Hide the overlay without changing any individual visibility preferences. */
@@ -115,4 +121,22 @@ body.ambient-mode #info {
 
 body.ambient-mode {
     cursor: none;
+}
+
+
+#controls-toggle:hover,
+#ambient-toggle:hover,
+#controls-toggle:focus-visible,
+#ambient-toggle:focus-visible {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.controls-close-icon,
+#controls-toggle[aria-expanded="true"] .controls-open-icon {
+    display: none;
+}
+
+#controls-toggle[aria-expanded="true"] .controls-close-icon {
+    display: block;
 }

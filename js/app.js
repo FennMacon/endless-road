@@ -337,7 +337,7 @@ const DEBUG = {
         objectDensity: { value: 15, min: 0, max: 30, step: 1, label: 'Scene Object Count' }
     },
     toggles: {
-        showFPS: { value: true, label: 'Show FPS Counter' },
+        showFPS: { value: false, label: 'Show FPS Counter' },
         showRoad: { value: true, label: 'Show Road' },
         showTraffic: { value: true, label: 'Show Oncoming Traffic' },
         showBuildings: { value: true, label: 'Show Buildings' },
@@ -615,7 +615,8 @@ function toggleControls() {
     const button = document.getElementById('controls-toggle');
     const open = menu.style.display === 'none';
     menu.style.display = open ? 'flex' : 'none';
-    button.textContent = open ? 'Close controls' : 'Controls';
+    button.setAttribute('aria-label', open ? 'Close controls' : 'Open controls');
+    button.title = open ? 'Close controls' : 'Open controls';
     button.setAttribute('aria-expanded', String(open));
 }
 
