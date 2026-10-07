@@ -339,6 +339,7 @@ const DEBUG = {
     toggles: {
         showFPS: { value: true, label: 'Show FPS Counter' },
         showRoad: { value: true, label: 'Show Road' },
+        showTraffic: { value: true, label: 'Show Oncoming Traffic' },
         showBuildings: { value: true, label: 'Show Buildings' },
         showMountains: { value: true, label: 'Show Mountains' },
         showStreetLamps: { value: true, label: 'Show Street Lamps' },
@@ -943,7 +944,7 @@ function applyControlChange(key) {
             }
             break;
         case 'showBuildings': case 'showStreetLamps': case 'showMountains':
-        case 'showSceneObjects': case 'showSpecks': case 'showStars':
+        case 'showSceneObjects': case 'showSpecks': case 'showStars': case 'showTraffic':
             // Animation keeps moving existing objects; only replenishment stops.
             break;
         case 'buildingDensity': createBuildings(); break;
@@ -2331,6 +2332,8 @@ function animate(timestamp = performance.now()) {
             groundPlane.material.color.copy(targetGroundColor);
         }
         
+        updateRoadAppearance(dayFactor);
+
         // Update lights
         if (ambientLight) {
             ambientLight.intensity = targetAmbientIntensity;
@@ -2354,6 +2357,7 @@ function animate(timestamp = performance.now()) {
         // Animate components
         const animations = [
             { name: 'road', func: animateRoad },
+            { name: 'traffic', func: animateTraffic },
             { name: 'desert objects', func: animateDesertObjects },
             { name: 'buildings', func: animateBuildings },
             { name: 'mountains', func: animateMountains },
@@ -2441,6 +2445,90 @@ function updateSceneTransition() {
 // Add easing function for smoother transitions
 function easeInOutCubic(x) {
     return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+// Small palette shifts keep lane markings legible throughout a transition.
+const roadPalettes = {
+    desert: { surface: 0x211B18, edge: 0xE9D6B1, center: 0xEFC66D },
+    forest: { surface: 0x141F1B, edge: 0xBDD4C7, center: 0xCFCC83 },
+    snowy: { surface: 0x25313C, edge: 0xDEEAF0, center: 0xC3D4A0 },
+    city: { surface: 0x171C2A, edge: 0xC6D3E5, center: 0xE1C588 }
+};
+
+function updateRoadAppearance(dayFactor) {
+    const current = roadPalettes[scenes[currentSceneIndex]];
+    const next = roadPalettes[scenes[nextSceneIndex]];
+    const blend = isSceneTransitioning ? easeInOutCubic(sceneTransitionProgress) : 0;
+    const color = key => new THREE.Color(current[key]).lerp(new THREE.Color(next[key]), blend);
+    const surface = color('surface').multiplyScalar(0.5 + dayFactor * 0.5);
+    const edge = color('edge').multiplyScalar(0.7 + dayFactor * 0.3);
+    const center = color('center').multiplyScalar(0.75 + dayFactor * 0.25);
+    roadSegments.forEach(road => road.material.color.copy(surface));
+    [leftEdgeLine, rightEdgeLine].forEach(line => { if (line) line.material.color.copy(edge); });
+    [leftYellowLine, rightYellowLine].forEach(line => { if (line) line.material.color.copy(center); });
+}
+
+let traffic = [];
+let trafficWait = 6000;
+
+function createTrafficCar() {
+    const car = new THREE.Group();
+    const colors = [0xBCDDE8, 0xE7BFA2, 0xCFBEE3, 0xC2D7B4];
+    const tint = colors[Math.floor(Math.random() * colors.length)];
+    const shell = new THREE.MeshBasicMaterial({color: tint, transparent: true, opacity: 0.08, depthWrite: false});
+    const edges = new THREE.LineBasicMaterial({color: tint, transparent: true, opacity: 0.8, depthWrite: false});
+    const box = (width, height, length, y, z) => {
+        const geometry = new THREE.BoxGeometry(width, height, length);
+        const body = new THREE.Mesh(geometry, shell);
+        body.position.set(0, y, z);
+        const frame = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), edges);
+        frame.position.copy(body.position);
+        car.add(body, frame);
+    };
+    box(1.8, 0.65, 3.8, 0.65, 0);
+    box(1.45, 0.65, 1.8, 1.3, -0.25);
+    for (const x of [-0.95, 0.95]) {
+        for (const z of [-1.1, 1.1]) {
+            const points = Array.from({length: 16}, (_, i) => {
+                const angle = i * Math.PI * 2 / 16;
+                return new THREE.Vector3(x, 0.38 + Math.cos(angle) * 0.32, z + Math.sin(angle) * 0.32);
+            });
+            car.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), edges));
+        }
+    }
+    const headlightMaterial = new THREE.MeshBasicMaterial({color: 0xFFF0CA, transparent: true, opacity: 0.9, depthWrite: false});
+    const headlightGeometry = new THREE.BoxGeometry(0.3, 0.18, 0.06);
+    for (const x of [-0.6, 0.6]) {
+        const headlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+        headlight.position.set(x, 0.75, 1.93);
+        car.add(headlight);
+    }
+    car.position.set(-roadWidth / 4, 0, camera.position.z - 500);
+    car.userData.approachSpeed = 1.4 + Math.random() * 0.6;
+    startSceneryFade(car);
+    return car;
+}
+
+function animateTraffic() {
+    const enabled = DEBUG.toggles.showTraffic.value && DEBUG.toggles.showRoad.value;
+    if (enabled) {
+        trafficWait -= deltaMilliseconds;
+        if (trafficWait <= 0 && traffic.length < 3) {
+            const car = createTrafficCar();
+            scene.add(car);
+            traffic.push(car);
+            trafficWait = 12000 + Math.random() * 13000;
+        }
+    }
+    traffic = traffic.filter(car => {
+        car.position.z += (speed + car.userData.approachSpeed) * frameScale;
+        updateSceneryFade(car);
+        if (car.position.z > camera.position.z + 25) {
+            removeScenery(car);
+            return false;
+        }
+        return true;
+    });
 }
 
 function animateRoad() {
@@ -2776,7 +2864,7 @@ function createVisibilitySection() {
     section.appendChild(hint);
     
     // Add main object toggles
-    const mainToggles = ['showRoad', 'showBuildings', 'showStreetLamps', 'showMountains', 'showSceneObjects', 'showStars', 'showSpecks'];
+    const mainToggles = ['showRoad', 'showTraffic', 'showBuildings', 'showStreetLamps', 'showMountains', 'showSceneObjects', 'showStars', 'showSpecks'];
     addToggles(section, mainToggles);
     
     // Add scene-specific object toggles
