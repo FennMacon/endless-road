@@ -314,6 +314,9 @@ const moveSpeed = 0.5;
 const keysPressed = {};
 let cameraTarget = new THREE.Vector3(2, 0, -40);
 const rearSceneryDistance = 400;
+// Wide mountain silhouettes remain in side views long after nearby scenery passes.
+const rearMountainFadeStart = 900;
+const rearMountainDistance = 1200;
 const viewNames = ['Front', 'Right', 'Back', 'Left'];
 let cameraViewIndex = 0;
 
@@ -2065,7 +2068,9 @@ function updateSceneryFade(object, retiring = false) {
     const lighting = object.userData.type ? 0.7 + dayFactor * 0.3 : 1;
     const rearFade = object.userData.type === 'horizon'
         ? rearSceneryFade(object.userData.horizonTravel ?? 0)
-        : rearSceneryFade(object.position.z - camera.position.z);
+        : ['mountain', 'skyscraper'].includes(object.userData.type)
+            ? 1 - THREE.MathUtils.smoothstep(object.position.z - camera.position.z, rearMountainFadeStart, rearMountainDistance)
+            : rearSceneryFade(object.position.z - camera.position.z);
     object.traverse(child => {
         const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
         let layerWeight = 1;
@@ -2238,7 +2243,7 @@ function animateMountains() {
         }
         mountain.position.z += speed * frameScale;
 
-        if (mountain.position.z > camera.position.z + rearSceneryDistance) {
+        if (mountain.position.z > camera.position.z + rearMountainDistance) {
             if (!DEBUG.toggles.showMountains.value) {
                 // Remove mountain when it passes behind camera if toggle is off
                 removeScenery(mountain);
