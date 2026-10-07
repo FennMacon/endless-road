@@ -11,6 +11,8 @@ let mountains = [];
 let dayNightCycle = 0; // 0 to 2π for full day/night cycle
 let dayNightSpeed = 0.001; // Speed of day/night cycle
 let specks = []; // Added specks array
+const celestialPathOffset = 160; // Right of the road, toward the mountain range.
+let lunarPhase = 0; // Full moon initially; one lunar cycle per eight day/night cycles.
 const sunPathRadius = 400; // Increased radius for sun/moon path
 const sunPathHeight = 300; // Maximum height of sun/moon
 
@@ -1149,13 +1151,38 @@ function createSun() {
     sunObject.add(sunGlow);
 
     // Create moon
-    const moonGeometry = new THREE.SphereGeometry(8, 16, 16);
-    const moonMaterial = new THREE.MeshBasicMaterial({
-        color: 0xEEEEEE,
+    const moonGeometry = new THREE.PlaneGeometry(16, 16);
+    const moonMaterial = new THREE.ShaderMaterial({
         transparent: true,
-        opacity: 0.9,
-        fog: false,
-        depthWrite: false
+        depthWrite: false,
+        uniforms: {
+            phase: {value: lunarPhase},
+            opacity: {value: 0.9},
+            tint: {value: new THREE.Color(0xEEEEFF)}
+        },
+        vertexShader: `
+            varying vec2 diskUv;
+            void main() {
+                diskUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            varying vec2 diskUv;
+            uniform float phase;
+            uniform float opacity;
+            uniform vec3 tint;
+            void main() {
+                vec2 p = diskUv * 2.0 - 1.0;
+                float radius = length(p);
+                if (radius >= 1.0) discard;
+                vec3 normal = vec3(p, sqrt(max(0.0, 1.0 - dot(p, p))));
+                vec3 lightDirection = vec3(sin(phase), 0.0, cos(phase));
+                float light = smoothstep(-0.025, 0.025, dot(normal, lightDirection));
+                float rim = 1.0 - smoothstep(0.96, 1.0, radius);
+                gl_FragColor = vec4(tint, opacity * rim * light);
+            }
+        `
     });
     moon = new THREE.Mesh(moonGeometry, moonMaterial);
     
@@ -1182,7 +1209,7 @@ function updateCelestialCycle() {
     // and PI sets behind. The moon traces the same path during the night.
     const positionBody = (body, phase, glowOpacity) => {
         const altitude = Math.sin(phase) * sunPathHeight;
-        body.position.set(camera.position.x, camera.position.y + altitude,
+        body.position.set(camera.position.x + celestialPathOffset, camera.position.y + altitude,
             camera.position.z - Math.cos(phase) * sunPathRadius);
         const horizonFade = THREE.MathUtils.smoothstep(altitude, -12, 18);
         body.visible = altitude > -12;
@@ -1192,6 +1219,11 @@ function updateCelestialCycle() {
     };
     const altitude = positionBody(sunObject, dayNightCycle, 0.35);
     positionBody(moon, dayNightCycle + Math.PI, 0.22);
+    moon.lookAt(camera.position);
+    moon.material.uniforms.phase.value = lunarPhase;
+    moon.material.uniforms.opacity.value = moon.material.opacity;
+    const moonIllumination = (1 + Math.cos(lunarPhase)) / 2;
+    moon.children[0].material.opacity *= moonIllumination;
     const daylight = Math.max(0, Math.sin(dayNightCycle));
     sunObject.material.color.setHex(0xFFA15A).lerp(new THREE.Color(0xFFF1BD), THREE.MathUtils.smoothstep(altitude, 0, 100));
     sunObject.children[0].material.color.copy(sunObject.material.color);
@@ -2260,6 +2292,7 @@ function animate(timestamp = performance.now()) {
         }
         
         // Update day/night cycle
+        lunarPhase = (lunarPhase + dayNightSpeed * frameScale / 8) % (Math.PI * 2);
         dayNightCycle += dayNightSpeed * frameScale;
         dayNightCycle %= Math.PI * 2;
         
