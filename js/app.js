@@ -1116,19 +1116,22 @@ function createLighting() {
     directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
     directionalLight.position.set(1, 1, 0);
     scene.add(directionalLight);
+    scene.add(directionalLight.target);
 }
 
 function createSun() {
     // Create a sun sphere
     const sunGeometry = new THREE.SphereGeometry(10, 16, 16);
     const sunMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0xFFFF00, 
+        color: 0xFFF1BD, 
         transparent: true,
-        opacity: 0.9
+        opacity: 0.9,
+        fog: false,
+        depthWrite: false
     });
     sunObject = new THREE.Mesh(sunGeometry, sunMaterial);
     
-    // Position the sun behind and above
+    // Positions are updated from the shared day/night phase each frame.
     sunObject.position.set(0, sunPathHeight, sunPathRadius);
     scene.add(sunObject);
     
@@ -1137,7 +1140,10 @@ function createSun() {
     const sunLightMaterial = new THREE.MeshBasicMaterial({
         color: 0xFFFF99,
         transparent: true,
-        opacity: 0.4
+        opacity: 0.4,
+        fog: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
     });
     const sunGlow = new THREE.Mesh(sunLightGeometry, sunLightMaterial);
     sunObject.add(sunGlow);
@@ -1147,11 +1153,13 @@ function createSun() {
     const moonMaterial = new THREE.MeshBasicMaterial({
         color: 0xEEEEEE,
         transparent: true,
-        opacity: 0.9
+        opacity: 0.9,
+        fog: false,
+        depthWrite: false
     });
     moon = new THREE.Mesh(moonGeometry, moonMaterial);
     
-    // Position moon opposite to sun
+    // Moon follows the same arc half a cycle after the sun.
     moon.position.set(0, -sunPathHeight, -sunPathRadius);
     scene.add(moon);
     
@@ -1160,10 +1168,36 @@ function createSun() {
     const moonLightMaterial = new THREE.MeshBasicMaterial({
         color: 0xCCCCFF,
         transparent: true,
-        opacity: 0.3
+        opacity: 0.3,
+        fog: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
     });
     const moonGlow = new THREE.Mesh(moonLightGeometry, moonLightMaterial);
     moon.add(moonGlow);
+}
+
+function updateCelestialCycle() {
+    // Looking down the road is -Z: phase 0 rises ahead, PI/2 is overhead,
+    // and PI sets behind. The moon traces the same path during the night.
+    const positionBody = (body, phase, glowOpacity) => {
+        const altitude = Math.sin(phase) * sunPathHeight;
+        body.position.set(camera.position.x, camera.position.y + altitude,
+            camera.position.z - Math.cos(phase) * sunPathRadius);
+        const horizonFade = THREE.MathUtils.smoothstep(altitude, -12, 18);
+        body.visible = altitude > -12;
+        body.material.opacity = 0.9 * horizonFade;
+        body.children[0].material.opacity = glowOpacity * horizonFade;
+        return altitude;
+    };
+    const altitude = positionBody(sunObject, dayNightCycle, 0.35);
+    positionBody(moon, dayNightCycle + Math.PI, 0.22);
+    const daylight = Math.max(0, Math.sin(dayNightCycle));
+    sunObject.material.color.setHex(0xFFA15A).lerp(new THREE.Color(0xFFF1BD), THREE.MathUtils.smoothstep(altitude, 0, 100));
+    sunObject.children[0].material.color.copy(sunObject.material.color);
+    directionalLight.position.copy(daylight > 0 ? sunObject.position : moon.position);
+    directionalLight.target.position.set(camera.position.x, 0, camera.position.z);
+    directionalLight.color.setHex(0xBBCFFF).lerp(new THREE.Color(0xFFF1DC), THREE.MathUtils.smoothstep(daylight, 0, 0.35));
 }
 
 function createDesertGround() {
@@ -2227,9 +2261,7 @@ function animate(timestamp = performance.now()) {
         
         // Update day/night cycle
         dayNightCycle += dayNightSpeed * frameScale;
-        if (dayNightCycle > Math.PI * 2) {
-            dayNightCycle = 0;
-        }
+        dayNightCycle %= Math.PI * 2;
         
         // Calculate day/night factor (0 = night, 1 = day)
         const dayFactor = Math.max(0, Math.sin(-dayNightCycle + Math.PI));
@@ -2405,6 +2437,7 @@ function animate(timestamp = performance.now()) {
         // Update camera and render
         try {
             updateCamera();
+            updateCelestialCycle();
             renderer.render(scene, camera);
         } catch (error) {
             console.error('Error in render cycle:', error);
