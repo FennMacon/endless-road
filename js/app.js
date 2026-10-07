@@ -5,9 +5,6 @@ let ambientLight, directionalLight;
 let isNight = false;
 let speed = 1.0;
 let groundPlane; // Reference to the ground plane for opacity changes
-let isTransitioning = false; // For sunset/sunrise animation
-let transitionProgress = 0; // For tracking transition progress
-let transitionDirection = 1; // 1 for day->night, -1 for night->day
 let sunObject; // Reference to the sun object
 let clouds = []; // Reference to cloud objects
 let mountains = [];
@@ -306,6 +303,10 @@ const speckCount = 2000;
 const dashLength = 1, dashSpacing = 10;
 const fadeDelay = 5000; // 5 seconds before UI fades
 
+// Mountain positioning constants
+const mountainZoneStart = roadWidth/2 + 150; // Distance from road center to start of mountain zone
+const mountainZoneWidth = 400; // Width of the mountain zone
+
 // Camera controls
 const moveSpeed = 0.5;
 const keysPressed = {};
@@ -321,11 +322,10 @@ const DEBUG = {
     logs: [],
     maxLogs: 100,
     variables: {
-        speed: { value: 0.5, min: 0, max: 2, step: 0.1, label: 'Movement Speed' },
+        speed: { value: 1.0, min: 0, max: 2, step: 0.1, label: 'Road Travel Speed' },
         moveSpeed: { value: 0.5, min: 0.1, max: 2, step: 0.1, label: 'Camera Move Speed' },
-        dayNightSpeed: { value: 0.0005, min: 0, max: 0.01, step: 0.0001, label: 'Day/Night Cycle Speed' },
+        dayNightSpeed: { value: 0.001, min: 0, max: 0.01, step: 0.0001, label: 'Day/Night Cycle Speed' },
         sceneTransitionDuration: { value: 10000, min: 1000, max: 20000, step: 1000, label: 'Scene Transition Duration (ms)' },
-        roadWidth: { value: 10, min: 5, max: 20, step: 1, label: 'Road Width' },
         speckCount: { value: 5000, min: 0, max: 10000, step: 100, label: 'Ground Speck Count' },
         speckSize: { value: 0.5, min: 0.1, max: 2.0, step: 0.1, label: 'Ground Speck Size' },
         starCount: { value: 8000, min: 0, max: 20000, step: 100, label: 'Star Count' },
@@ -333,8 +333,8 @@ const DEBUG = {
         starSpread: { value: 0.8, min: 0.1, max: 1.0, step: 0.1, label: 'Star Spread (Height)' },
         starDistance: { value: 600, min: 400, max: 1200, step: 50, label: 'Star Distance' },
         starTwinkleSpeed: { value: 0.05, min: 0, max: 0.1, step: 0.001, label: 'Star Twinkle Speed' },
-        buildingDensity: { value: 10, min: 0, max: 30, step: 1, label: 'Building Density' },
-        objectDensity: { value: 15, min: 0, max: 30, step: 1, label: 'Scene Object Density' }
+        buildingDensity: { value: 10, min: 0, max: 30, step: 1, label: 'Building Count' },
+        objectDensity: { value: 15, min: 0, max: 30, step: 1, label: 'Scene Object Count' }
     },
     toggles: {
         showFPS: { value: true, label: 'Show FPS Counter' },
@@ -346,7 +346,7 @@ const DEBUG = {
         showStars: { value: true, label: 'Show Stars' },
         showSpecks: { value: true, label: 'Show Ground Specks' },
         autoRotateScenes: { value: true, label: 'Auto Rotate Scenes' },
-        showDebug: { value: true, label: 'Show Debug Info' }
+        showLogs: { value: true, label: 'Show Debug Logs' }
     },
     sceneObjectsState: {
         desert: true,
@@ -496,7 +496,7 @@ function createDebugMenu() {
     const content = document.createElement('div');
     content.style.cssText = `
         display: grid;
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
         gap: 20px;
     `;
 
@@ -520,7 +520,7 @@ function createDebugMenu() {
             content: createEnvironmentSection()
         },
         camera: {
-            title: 'Camera Controls',
+            title: 'Movement',
             content: createCameraSection()
         },
         objects: {
@@ -616,6 +616,7 @@ function createSceneSection() {
     scenes.forEach(scene => {
         const button = document.createElement('button');
         button.textContent = scene.charAt(0).toUpperCase() + scene.slice(1);
+        button.dataset.sceneIndex = scenes.indexOf(scene);
         button.style.cssText = `
             padding: 5px 10px;
             background: ${scene === scenes[currentSceneIndex] ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)'};
@@ -640,8 +641,7 @@ function createSceneSection() {
         button.addEventListener('click', () => {
             const newIndex = scenes.indexOf(scene);
             if (newIndex !== currentSceneIndex && !isSceneTransitioning) {
-                nextSceneIndex = newIndex;
-                startSceneTransition();
+                startSceneTransition(newIndex);
                 log(`Manually transitioning to ${scene} scene`, 'info');
                 
                 // Update button styles
@@ -675,26 +675,9 @@ function createEnvironmentSection() {
     const speckControls = ['speckCount', 'speckSize'];
     addVariableSliders(section, speckControls);
     
-    // Add speck toggle
-    addToggles(section, ['showSpecks']);
-    
-    // Add update specks button
-    const updateSpecksButton = createButton('Update Specks', () => {
-        createSpecks();
-        log('Ground specks updated with new settings', 'info');
-    });
-    section.appendChild(updateSpecksButton);
-    
     // Star controls
     const starControls = ['starCount', 'starSize', 'starSpread', 'starDistance', 'starTwinkleSpeed'];
     addVariableSliders(section, starControls);
-    
-    // Add update stars button
-    const updateStarsButton = createButton('Update Stars', updateStars);
-    section.appendChild(updateStarsButton);
-    
-    // Add star toggle
-    addToggles(section, ['showStars']);
     
     return section;
 }
@@ -712,25 +695,12 @@ function createCameraSection() {
 function createObjectsSection() {
     const section = document.createElement('div');
     
-    // Add object visibility toggles
-    const objectToggles = ['showRoad', 'showStreetLamps', 'showBuildings', 'showMountains', 'showSceneObjects'];
-    addToggles(section, objectToggles);
-    
-    // Add a divider
-    const divider = document.createElement('div');
-    divider.style.cssText = `
-        height: 1px;
-        background: rgba(255, 255, 255, 0.2);
-        margin: 15px 0;
-    `;
-    section.appendChild(divider);
-    
     // Building controls
     const buildingVars = ['buildingDensity'];
     addVariableSliders(section, buildingVars);
     
     // Add refresh buildings button
-    const refreshButton = createButton('Refresh Buildings', () => {
+    const refreshButton = createButton('Regenerate Buildings', () => {
         createBuildings();
         log('Buildings refreshed with new density settings', 'info');
     });
@@ -750,7 +720,7 @@ function createObjectsSection() {
     addVariableSliders(section, objectVars);
 
     // Add refresh objects button
-    const refreshObjectsButton = createButton('Refresh Scene Objects', () => {
+    const refreshObjectsButton = createButton('Regenerate Scene Objects', () => {
         createDesertObjects();
         log('Scene objects refreshed with new density settings', 'info');
     });
@@ -816,6 +786,8 @@ function addVariableSliders(container, variables) {
 
         const slider = document.createElement('input');
         slider.type = 'range';
+        slider.id = `setting-${key}`;
+        label.htmlFor = slider.id;
         slider.min = config.min;
         slider.max = config.max;
         slider.step = config.step;
@@ -836,6 +808,7 @@ function addVariableSliders(container, variables) {
         slider.addEventListener('input', () => {
             config.value = parseFloat(slider.value);
             value.textContent = slider.value;
+            applyControlChange(key);
         });
 
         controlsDiv.appendChild(slider);
@@ -859,7 +832,7 @@ function addToggles(container, toggles) {
     Object.entries(DEBUG.toggles).forEach(([key, config]) => {
         if (!toggles.includes(key)) return;
 
-        const row = document.createElement('div');
+        const row = document.createElement('label');
         row.style.cssText = `
             display: flex;
             align-items: center;
@@ -874,15 +847,13 @@ function addToggles(container, toggles) {
         const toggle = document.createElement('input');
         toggle.type = 'checkbox';
         toggle.checked = config.value;
-        toggle.id = `toggle-${key}`;
         toggle.style.cssText = `
             margin: 0;
             cursor: pointer;
         `;
 
-        const label = document.createElement('label');
+        const label = document.createElement('span');
         label.textContent = config.label || key;
-        label.htmlFor = `toggle-${key}`;
         label.style.cssText = `
             font-size: 12px;
             cursor: pointer;
@@ -895,42 +866,14 @@ function addToggles(container, toggles) {
             config.value = toggle.checked;
             row.style.backgroundColor = toggle.checked ? 'rgba(255, 255, 255, 0.2)' : 'transparent';
             
-            // Special handling for road toggle
-            if (key === 'showRoad' && !toggle.checked) {
-                // Immediately remove road when toggled off
-                roadSegments.forEach(segment => {
-                    if (segment) {
-                        scene.remove(segment);
-                    }
-                });
-                roadSegments = [];
-                [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
-                    if (line) {
-                        scene.remove(line);
-                    }
-                });
-                leftEdgeLine = null;
-                rightEdgeLine = null;
-                leftYellowLine = null;
-                rightYellowLine = null;
-            }
-            
+            applyControlChange(key);
+
             log(`${config.label} ${toggle.checked ? 'enabled' : 'disabled'}`, 'info');
         };
 
-        // Make the entire row clickable
-        row.onclick = (e) => {
-            if (e.target !== toggle) {
-                toggle.checked = !toggle.checked;
-                updateToggle();
-            }
-        };
-
-        // Handle direct checkbox clicks
-        toggle.onclick = (e) => {
-            e.stopPropagation();
-            updateToggle();
-        };
+        // The wrapping label activates the checkbox exactly once for clicks
+        // anywhere in the row; change also covers keyboard activation.
+        toggle.addEventListener('change', updateToggle);
 
         row.appendChild(toggle);
         row.appendChild(label);
@@ -953,6 +896,31 @@ function addToggles(container, toggles) {
     });
 
     container.appendChild(toggleContainer);
+}
+
+function applyControlChange(key) {
+    switch (key) {
+        case 'showRoad':
+            roadSegments.forEach(removeScenery);
+            [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(removeScenery);
+            roadSegments = [];
+            leftEdgeLine = rightEdgeLine = leftYellowLine = rightYellowLine = null;
+            if (DEBUG.toggles.showRoad.value) createRoad();
+            break;
+        case 'showBuildings': case 'buildingDensity': createBuildings(); break;
+        case 'showStreetLamps': createStreetLamps(); break;
+        case 'showMountains': createMountains(); break;
+        case 'showSceneObjects': case 'objectDensity': createDesertObjects(); break;
+        case 'showSpecks': case 'speckCount': createSpecks(); break;
+        case 'showStars': case 'starCount': case 'starSize': case 'starSpread':
+        case 'starDistance': case 'starTwinkleSpeed': createStars(); break;
+        case 'showFPS':
+            if (DEBUG.toggles.showFPS.value && !stats) initStats();
+            if (stats) stats.dom.style.display = DEBUG.toggles.showFPS.value ? 'block' : 'none';
+            break;
+        case 'showLogs': updateDebugLogs(); break;
+        case 'autoRotateScenes': lastSceneChangeTime = Date.now(); break;
+    }
 }
 
 // Helper function to create buttons
@@ -989,6 +957,7 @@ function updateDebugLogs() {
     const logsSection = document.getElementById('debug-logs');
     if (!logsSection) return;
     
+    logsSection.style.display = DEBUG.toggles.showLogs.value ? 'block' : 'none';
     logsSection.innerHTML = '<h4>Debug Logs</h4>';
     DEBUG.logs.forEach(log => {
         const logEntry = document.createElement('div');
@@ -1010,7 +979,7 @@ function init() {
         // Initialize scene
         scene = new THREE.Scene();
         const currentState = sceneStates[scenes[currentSceneIndex]];
-        scene.background = currentState.dayColors.sky;
+        scene.background = currentState.dayColors.sky.clone();
         scene.fog = new THREE.FogExp2(currentState.dayColors.sky, 0.002);
         
         // Initialize camera
@@ -1023,7 +992,7 @@ function init() {
         // Initialize renderer
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         document.body.appendChild(renderer.domElement);
         console.log('Renderer initialized successfully');
         
@@ -1035,7 +1004,10 @@ function init() {
         // Try to initialize Stats if enabled
         if (DEBUG.toggles.showFPS.value) {
             try {
-                initStats();
+                const statsResult = initStats();
+                if (!statsResult) {
+                    DEBUG.toggles.showFPS.value = false;
+                }
             } catch (error) {
                 console.warn('Failed to initialize FPS counter:', error);
                 DEBUG.toggles.showFPS.value = false;
@@ -1064,7 +1036,6 @@ function init() {
         createLighting();
         createSun();
         createDesertGround();
-        createSpecks();
         createRoad();
         createStreetLamps();
         createBuildings();
@@ -1080,6 +1051,9 @@ function init() {
         // Set up event listeners
         setupEventListeners();
         
+        // Give the initial scene its full interval before auto rotation.
+        lastSceneChangeTime = Date.now();
+
         // Start animation loop
         animate();
         console.log('Animation loop started');
@@ -1172,43 +1146,47 @@ function createDesertGround() {
     createSpecks();
 }
 
+// One draw call for all ground specks, with recycled instance transforms.
+let speckMesh;
+const speckTransform = new THREE.Object3D();
+
+function resetSpeck(index, z) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    specks[index] = new THREE.Vector3(
+        side * (roadWidth / 2 + 5 + Math.random() * 200), 0, z
+    );
+    const palette = isSceneTransitioning && Math.random() < sceneTransitionProgress * 1.5
+        ? palettes[scenes[nextSceneIndex]] : palettes[scenes[currentSceneIndex]];
+    speckMesh.setColorAt(index, palette[Math.floor(Math.random() * palette.length)]);
+}
+
+function updateSpeckTransform(index) {
+    speckTransform.position.copy(specks[index]);
+    speckTransform.scale.setScalar(DEBUG.variables.speckSize.value / 0.5);
+    speckTransform.updateMatrix();
+    speckMesh.setMatrixAt(index, speckTransform.matrix);
+}
+
 function createSpecks() {
-    const currentPalette = palettes[scenes[currentSceneIndex]];
-    const speckCount = DEBUG.variables.speckCount.value;
-    
-    // Clear existing specks first
-    specks.forEach(speck => {
-        if (speck) {
-            scene.remove(speck);
-            speck.geometry.dispose();
-            speck.material.dispose();
-        }
-    });
+    removeScenery(speckMesh);
+    speckMesh = null;
     specks = [];
-    
-    // Create a single geometry for all specks
-    const speckGeometry = new THREE.SphereGeometry(0.1, 4, 4); // Reduced segments for better performance
-    
-    for (let i = 0; i < speckCount; i++) {
-        const speckColor = currentPalette[Math.floor(Math.random() * currentPalette.length)];
-        const speckMaterial = new THREE.MeshBasicMaterial({ 
-            color: speckColor,
-            transparent: true,
-            opacity: 0.8,
-            depthWrite: false // Prevents shadow artifacts
-        });
-        const speck = new THREE.Mesh(speckGeometry, speckMaterial);
-        
-        // Position specks
-        speck.position.z = camera.position.z - 400 + Math.random() * 400;
-        const side = Math.random() < 0.5 ? -1 : 1;
-        const distance = roadWidth / 2 + 5 + Math.random() * 200;
-        speck.position.x = side * distance;
-        speck.position.y = 0;
-        
-        scene.add(speck);
-        specks.push(speck);
+    if (!DEBUG.toggles.showSpecks.value) return;
+    const count = Math.max(0, Math.floor(DEBUG.variables.speckCount.value));
+    if (!count) return;
+    speckMesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(0.1, 4, 4),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.8, depthWrite: false }),
+        count
+    );
+    speckMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Instances are recycled around the camera; static bounds would be stale.
+    speckMesh.frustumCulled = false;
+    for (let i = 0; i < count; i++) {
+        resetSpeck(i, camera.position.z - 400 + Math.random() * 400);
+        updateSpeckTransform(i);
     }
+    scene.add(speckMesh);
 }
 
 function createRoad() {
@@ -1291,17 +1269,10 @@ function createRoad() {
 }
 
 function createStreetLamps() {
-    // Clear any existing street lamps
-    streetLamps.forEach(lamp => {
-        if (lamp && lamp.visible) {
-            lamp.visible = false;
-            if (lamp.userData.glow) lamp.userData.glow.visible = false;
-            if (lamp.userData.outerGlow) lamp.userData.outerGlow.visible = false;
-            if (lamp.userData.light) lamp.userData.light.visible = false;
-        }
-    });
+    streetLamps.forEach(removeScenery);
     streetLamps = [];
-    
+    if (!DEBUG.toggles.showStreetLamps.value) return;
+
     // Create street lamps along the road
     const lampCount = 10;
     const lampSpacing = roadLength * 4;
@@ -1368,10 +1339,30 @@ function createStreetLamps() {
     }
 }
 
+// Dispose resources owned by scenery when it is permanently removed.
+// Sets prevent disposing materials shared by children more than once.
+function removeScenery(object) {
+    if (!object) return;
+    if (object.parent) object.parent.remove(object);
+    if (object.isInstancedMesh) object.dispose();
+    const geometries = new Set();
+    const materials = new Set();
+    object.traverse(child => {
+        if (child.geometry) geometries.add(child.geometry);
+        if (child.material) {
+            const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+            childMaterials.forEach(material => materials.add(material));
+        }
+    });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
+}
+
 function createBuildings() {
     // Clear any existing buildings
-    buildings.forEach(building => scene.remove(building));
+    buildings.forEach(removeScenery);
     buildings = [];
+    if (!DEBUG.toggles.showBuildings.value) return;
     
     // Use building density from debug settings
     const buildingCount = DEBUG.variables.buildingDensity.value;
@@ -1438,11 +1429,12 @@ function createDesertObjects(preserveExisting = false) {
     if (!preserveExisting) {
         // Remove existing objects
         desertObjects.forEach(object => {
-            if (object) scene.remove(object);
+            if (object) removeScenery(object);
         });
         desertObjects = [];
     }
 
+    if (!DEBUG.toggles.showSceneObjects.value || !DEBUG.sceneObjectsState[scenes[currentSceneIndex]]) return;
     const objectCount = DEBUG.variables.objectDensity.value;
     
     // Create new objects
@@ -1468,22 +1460,21 @@ function createMountains() {
     
     // Clear any existing mountains
     mountains.forEach(mountain => {
-        if (mountain) scene.remove(mountain);
+        if (mountain) removeScenery(mountain);
     });
     mountains = [];
     
-    // Create mountains or skyscrapers on both sides of the road
-    const mountainCount = scenes[currentSceneIndex] === 'city' ? 6 : 8; // Fewer skyscrapers for city
+    // Create mountains or skyscrapers on both sides of the road - more for better horizon coverage
+    const mountainCount = scenes[currentSceneIndex] === 'city' ? 10 : 12; // More mountains/skyscrapers for horizon
     
     // Define zones (from road outward):
     // Road: 0 to roadWidth/2
     // Street Lamps: roadWidth/2 to roadWidth/2 + 5
     // Buildings: roadWidth/2 + 5 to roadWidth/2 + 30
     // Objects: roadWidth/2 + 30 to roadWidth/2 + 100
-    // Mountains: roadWidth/2 + 100 onwards
+    // Mountains: roadWidth/2 + 150 onwards (pushed further for horizon effect)
     
-    const mountainZoneStart = roadWidth/2 + 100;
-    const mountainZoneWidth = 200; // How wide the mountain zone is
+    // Mountain zone constants are now defined globally
     
     const isCity = scenes[currentSceneIndex] === 'city';
     
@@ -1500,22 +1491,26 @@ function createMountains() {
     }
     
     for (let side = -1; side <= 1; side += 2) { // -1 for left, 1 for right
+        // Create a seamless mountain range with overlapping peaks
         for (let i = 0; i < mountainCount; i++) {
             try {
                 const mountain = new THREE.Group();
                 
-                // Calculate mountain/skyscraper size based on distance from road
-                const distanceFromRoad = mountainZoneStart + Math.random() * mountainZoneWidth;
+                // Create overlapping zones for seamless horizon
+                const baseDistance = mountainZoneStart + (mountainZoneWidth * 0.3); // Start closer for background
+                const distanceVariation = mountainZoneWidth * 0.7;
+                const distanceFromRoad = baseDistance + Math.random() * distanceVariation;
                 
-                // Position the mountain/skyscraper
+                // Position mountains with some overlap for continuity
                 mountain.position.x = side * distanceFromRoad;
-                mountain.position.z = camera.position.z - 600 - i * 200;
+                mountain.position.z = camera.position.z - 400 - i * 150; // Closer spacing for better coverage
                 
                 // Create mountain or skyscraper based on current scene
                 if (isCity) {
                     createSkyscraper(mountain, distanceFromRoad);
                 } else {
-                    createSceneMountain(mountain, distanceFromRoad);
+                    // Create connected mountain chains for better height variation
+                    createMountainChain(mountain, distanceFromRoad, i, mountainCount);
                 }
                 
                 // Store the scene info with the mountain/skyscraper
@@ -1532,6 +1527,9 @@ function createMountains() {
         }
     }
     
+    // Create background horizon planes for seamless horizon coverage
+    createHorizonPlanes(isCity);
+    
     console.log("Created", mountains.length, "mountains/skyscrapers for", scenes[currentSceneIndex], "scene");
     
     // Add a visible indicator for debugging
@@ -1543,57 +1541,18 @@ function createMountains() {
 }
 
 function createStars() {
-    // Clear existing stars
-    stars.forEach(star => {
-        if (star) {
-            scene.remove(star);
-            if (star.geometry) star.geometry.dispose();
-            if (star.material) star.material.dispose();
-        }
-    });
+    stars.forEach(removeScenery);
     stars = [];
-
-    if (!DEBUG.toggles.showStars.value) return;
-
-    console.log("Creating stars with count:", DEBUG.variables.starCount.value);
-    
-    // Add the initial set of stars in batches for better performance
-    // This helps prevent frame drops when a large number of stars are created
-    const targetStarCount = DEBUG.variables.starCount.value * 2; // Double the count for initial visibility
-    const batchSize = 5000; // Create stars in batches of 5000
-    
-    // Add the first batch immediately
-    const firstBatchSize = Math.min(batchSize, targetStarCount);
-    addStars(firstBatchSize);
-    
-    // If we need more stars beyond the first batch, create them in subsequent frames
-    if (targetStarCount > batchSize) {
-        let remainingStars = targetStarCount - batchSize;
-        let batchIndex = 1;
-        
-        const createNextBatch = () => {
-            const nextBatchSize = Math.min(batchSize, remainingStars);
-            if (nextBatchSize <= 0) return;
-            
-            addStars(nextBatchSize);
-            remainingStars -= nextBatchSize;
-            batchIndex++;
-            
-            if (remainingStars > 0) {
-                // Schedule next batch in the next frame
-                requestAnimationFrame(createNextBatch);
-            }
-        };
-        
-        // Start creating batches in the next frame
-        requestAnimationFrame(createNextBatch);
+    if (DEBUG.toggles.showStars.value && DEBUG.variables.starCount.value > 0) {
+        addStars(DEBUG.variables.starCount.value);
     }
 }
 
 function addStars(count) {
     if (!DEBUG.toggles.showStars.value) return;
 
-    const starCount = count || DEBUG.variables.starCount.value;
+    const starCount = Math.max(0, Math.floor(count ?? DEBUG.variables.starCount.value));
+    if (!starCount) return;
     const starGeometry = new THREE.BufferGeometry();
     
     // Calculate the correct opacity based on day/night cycle for target opacity
@@ -1639,11 +1598,10 @@ function addStars(count) {
 
     // Get safe values for calculations
     const starDistance = Math.max(200, DEBUG.variables.starDistance.value || 800);
-    const starSpread = Math.max(0.1, Math.min(1.0, DEBUG.variables.starSpread.value || 0.8));
     
     // Set minimum and maximum height for stars
     const minStarHeight = 10; // Reduced to 10 as requested
-    const maxStarHeight = 250; // Changed maximum height from 500 to 250 as requested
+    const maxStarHeight = 10 + 300 * DEBUG.variables.starSpread.value; // Changed maximum height from 500 to 250 as requested
     
     // Initialize star positions in a dome shape that doesn't go below minStarHeight
     for (let i = 0; i < starCount; i++) {
@@ -1670,7 +1628,7 @@ function addStars(count) {
         colors[i * 3 + 2] = 1.0; // B
 
         // Get safe value for twinkle speed
-        const twinkleSpeed = Math.max(0.1, DEBUG.variables.starTwinkleSpeed.value || 1.0);
+        const twinkleSpeed = DEBUG.variables.starTwinkleSpeed.value;
         twinkleSpeeds[i] = twinkleSpeed * (0.5 + Math.random());
         twinklePhases[i] = Math.random() * Math.PI * 2;
         movementSpeeds[i] = 0.05 + Math.random() * 0.05;
@@ -1761,6 +1719,8 @@ function animateStars() {
                 fadeSpeed = fadeDaySpeed;
             }
             
+            fadeSpeed *= frameScale;
+
             // Adjust opacity towards target
             if (Math.abs(thisTargetOpacity - particleSystem.material.opacity) < fadeSpeed) {
                 particleSystem.material.opacity = thisTargetOpacity;
@@ -1783,7 +1743,7 @@ function animateStars() {
             
             // Minimum and maximum height for stars - same as used in addStars
             const minStarHeight = 10; // Updated to match the new minimum height
-            const maxStarHeight = 250; // Added to match the maximum height in addStars
+            const maxStarHeight = 10 + 300 * DEBUG.variables.starSpread.value; // Added to match the maximum height in addStars
             
             // Update each star in this particle system
             for (let i = 0; i < positions.length; i += 3) {
@@ -1795,8 +1755,8 @@ function animateStars() {
                 const adjustedCameraX = camera.position.x;
                 const adjustedCameraZ = camera.position.z + 20; // Add 20 to emulate original camera z-position
                 
-                positions[i] += adjustedCameraX * movementSpeed * 0.1;
-                positions[i + 2] += adjustedCameraZ * movementSpeed * 0.1;
+                positions[i] += adjustedCameraX * movementSpeed * 0.1 * frameScale;
+                positions[i + 2] += adjustedCameraZ * movementSpeed * 0.1 * frameScale;
                 
                 // Ensure stars maintain minimum height
                 if (positions[i + 1] < minStarHeight) {
@@ -1932,7 +1892,7 @@ function animateStreetLamps() {
     streetLamps.forEach((lamp, index) => {
         if (!lamp) return;
         
-        lamp.position.z += speed;
+        lamp.position.z += speed * frameScale;
         
         if (lamp.position.z > camera.position.z + 10) {
             if (!DEBUG.toggles.showStreetLamps.value) {
@@ -1968,12 +1928,12 @@ function animateBuildings() {
     buildings.forEach((building, index) => {
         if (!building) return;
         
-        building.position.z += speed;
+        building.position.z += speed * frameScale;
         
         if (building.position.z > camera.position.z + 10) {
             if (!DEBUG.toggles.showBuildings.value) {
                 // Remove building when it passes behind camera if toggle is off
-                scene.remove(building);
+                removeScenery(building);
                 buildings[index] = null;
                 return;
             }
@@ -1984,9 +1944,10 @@ function animateBuildings() {
             building.position.x = keepOnSameSide * (roadWidth / 2 + 5 + Math.random() * 10);
             
             // Replace old building with new one to have variety
-            scene.remove(building);
+            removeScenery(building);
             buildings[index] = createRandomBuilding();
-            buildings[index].position.set(building.position.x, 0, building.position.z);
+            buildings[index].position.x = building.position.x;
+            buildings[index].position.z = building.position.z;
             scene.add(buildings[index]);
         }
     });
@@ -2004,10 +1965,10 @@ function animateDesertObjects() {
     desertObjects.forEach(object => {
         if (!object) return;
         
-        object.position.z += speed;
+        object.position.z += speed * frameScale;
         
         if (object.position.z > camera.position.z + 10) {
-            if (!DEBUG.toggles.showSceneObjects.value || object.userData.scene !== scenes[currentSceneIndex]) {
+            if (!DEBUG.toggles.showSceneObjects.value || !DEBUG.sceneObjectsState[scenes[currentSceneIndex]] || object.userData.scene !== scenes[currentSceneIndex]) {
                 objectsToRemove.push(object);
                 return;
             }
@@ -2023,7 +1984,7 @@ function animateDesertObjects() {
                 scene: scenes[currentSceneIndex]
             };
             
-            scene.remove(object);
+            removeScenery(object);
             scene.add(newObject);
             
             const index = desertObjects.indexOf(object);
@@ -2034,7 +1995,7 @@ function animateDesertObjects() {
     });
     
     objectsToRemove.forEach(object => {
-        scene.remove(object);
+        removeScenery(object);
         const index = desertObjects.indexOf(object);
         if (index !== -1) {
             desertObjects.splice(index, 1);
@@ -2059,19 +2020,38 @@ function animateMountains() {
     mountains.forEach((mountain, index) => {
         if (!mountain) return;
 
-        mountain.position.z += speed;
+        // Keep the distant horizon behind the camera instead of recycling it
+        // into foreground scenery. Refresh it when the environment changes.
+        if (mountain.userData.type === 'horizon' && DEBUG.toggles.showMountains.value) {
+            mountain.position.z = camera.position.z - 800;
+            const currentScene = scenes[currentSceneIndex];
+            if (mountain.userData.scene !== currentScene) {
+                while (mountain.children.length) {
+                    removeScenery(mountain.children[0]);
+                }
+                if (currentScene === 'city') {
+                    createDistantSkylineSilhouette(mountain);
+                } else {
+                    createDistantMountainRange(mountain, currentScene);
+                }
+                mountain.userData.scene = currentScene;
+            }
+            return;
+        }
+
+        mountain.position.z += speed * frameScale;
         
         if (mountain.position.z > camera.position.z + 100) {
             if (!DEBUG.toggles.showMountains.value) {
                 // Remove mountain when it passes behind camera if toggle is off
-                scene.remove(mountain);
+                removeScenery(mountain);
                 mountains[index] = null;
                 return;
             }
             
             // When a mountain passes behind the camera, remove it and create a new one
             // with the current scene's style
-            scene.remove(mountain);
+            removeScenery(mountain);
             
             try {
                 // Create a new mountain for the current scene
@@ -2079,8 +2059,6 @@ function animateMountains() {
                 
                 // Use the same side of the road as the old mountain
                 const side = mountain.position.x < 0 ? -1 : 1;
-                const mountainZoneStart = roadWidth/2 + 100;
-                const mountainZoneWidth = 200;
                 const distanceFromRoad = mountainZoneStart + Math.random() * mountainZoneWidth;
                 
                 // Position the new mountain far behind the camera
@@ -2095,7 +2073,7 @@ function animateMountains() {
                     createSkyscraper(newMountain, distanceFromRoad);
                 } else {
                     // Call a function to create a mountain
-                    createSceneMountain(newMountain, distanceFromRoad);
+                    createMountainChain(newMountain, distanceFromRoad, 0, 1);
                 }
                 
                 // Store the scene info with the mountain/skyscraper
@@ -2119,15 +2097,26 @@ function animateMountains() {
     });
 }
 
-function animate() {
+let lastFrameTime;
+let deltaMilliseconds = 0;
+let frameScale = 0;
+let animationFrameId;
+
+function animate(timestamp = performance.now()) {
     try {
-        requestAnimationFrame(animate);
+        // Cap long gaps so returning to a background tab does not jump scenery.
+        deltaMilliseconds = lastFrameTime === undefined ? 0 : Math.min(100, Math.max(0, timestamp - lastFrameTime));
+        lastFrameTime = timestamp;
+        frameScale = deltaMilliseconds * 60 / 1000;
+        speed = DEBUG.variables.speed.value;
+        dayNightSpeed = DEBUG.variables.dayNightSpeed.value;
+        animationFrameId = requestAnimationFrame(animate);
         
         // Increment frame counter
         frameCount++;
         
         // Update FPS if enabled
-        if (DEBUG.toggles.showFPS.value) {
+        if (DEBUG.toggles.showFPS.value && typeof stats !== 'undefined') {
             stats.begin();
         }
         
@@ -2140,7 +2129,7 @@ function animate() {
         }
         
         // Update day/night cycle
-        dayNightCycle += dayNightSpeed;
+        dayNightCycle += dayNightSpeed * frameScale;
         if (dayNightCycle > Math.PI * 2) {
             dayNightCycle = 0;
         }
@@ -2165,19 +2154,9 @@ function animate() {
                 }
             }
             
-            // Continuous star generation at night - less frequent than before
-            if (isNight && Math.random() < 0.005) { // 0.5% chance per frame to add stars
-                try {
-                    // Add a small number of new stars
-                    const starCount = Math.floor(DEBUG.variables.starCount.value * 0.03); // 3% of configured count
-                    if (starCount > 0) {
-                        addStars(starCount);
-                    }
-                } catch (error) {
-                    console.error('Error adding stars:', error);
-                }
-            }
-            
+            // Existing star particles recycle their positions in animateStars;
+            // adding systems every frame interval would grow the sky indefinitely.
+
             // Clean up only star systems that have passed behind the camera
             if (stars.length > 1) { // Keep at least one star system
                 const starsToKeep = [];
@@ -2291,8 +2270,17 @@ function animate() {
             directionalLight.intensity = Math.max(0.2, dayFactor);
         }
         
-        // Update status display
+        // Keep scene selection in sync with manual and automatic transitions.
+        document.querySelectorAll('[data-scene-index]').forEach(button => {
+            const selected = Number(button.dataset.sceneIndex) === (isSceneTransitioning ? nextSceneIndex : currentSceneIndex);
+            button.style.background = selected ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+            button.setAttribute('aria-pressed', String(selected));
+            button.disabled = isSceneTransitioning;
+        });
         updateStatusDisplay(dayFactor);
+
+        // Update mountain lighting based on day/night cycle
+        updateMountainLighting(dayFactor);
 
         // Animate components
         const animations = [
@@ -2324,55 +2312,28 @@ function animate() {
         }
 
         // End FPS measurement
-        if (DEBUG.toggles.showFPS.value) {
+        if (DEBUG.toggles.showFPS.value && typeof stats !== 'undefined') {
             stats.end();
         }
 
     } catch (error) {
         log('Critical animation error: ' + error.message, 'error');
-        cancelAnimationFrame(animate);
+        cancelAnimationFrame(animationFrameId);
         throw error;
     }
 }
 
-function startSceneTransition() {
+function startSceneTransition(targetIndex = (currentSceneIndex + 1) % scenes.length) {
     isSceneTransitioning = true;
     sceneTransitionProgress = 0;
-    nextSceneIndex = (currentSceneIndex + 1) % scenes.length;
+    nextSceneIndex = targetIndex;
     console.log(`Starting transition from ${scenes[currentSceneIndex]} to ${scenes[nextSceneIndex]}`);
     
-    // Instead of letting specks drop to 0 and then rebuilding, 
-    // we'll pre-populate with some specks from the next scene
-    if (DEBUG.toggles.showSpecks.value) {
-        // Calculate how many next-scene specks to add
-        const initialNextSceneSpecks = Math.floor(DEBUG.variables.speckCount.value * 0.2); // 20% of target count
-        const speckGeometry = new THREE.SphereGeometry(0.1, 4, 4);
-        const nextPalette = palettes[scenes[nextSceneIndex]];
-        
-        for (let i = 0; i < initialNextSceneSpecks; i++) {
-            const speckColor = nextPalette[Math.floor(Math.random() * nextPalette.length)];
-            const speckMaterial = new THREE.MeshBasicMaterial({ 
-                color: speckColor,
-                transparent: true,
-                opacity: 0.8,
-                depthWrite: false
-            });
-            
-            const speck = new THREE.Mesh(speckGeometry, speckMaterial);
-            speck.position.z = camera.position.z - 400 - Math.random() * 200; // Place further back
-            const side = Math.random() < 0.5 ? -1 : 1;
-            const distance = roadWidth / 2 + 5 + Math.random() * 200;
-            speck.position.x = side * distance;
-            speck.position.y = 0;
-            
-            scene.add(speck);
-            specks.push(speck);
-        }
-    }
+
 }
 
 function updateSceneTransition() {
-    sceneTransitionProgress += (1000 / 120) / sceneTransitionDuration;
+    sceneTransitionProgress += deltaMilliseconds / DEBUG.variables.sceneTransitionDuration.value;
     
     if (sceneTransitionProgress >= 1) {
         isSceneTransitioning = false;
@@ -2380,7 +2341,7 @@ function updateSceneTransition() {
         lastSceneChangeTime = Date.now();
         sceneTransitionProgress = 0;
         
-        // Don't force recreation of mountains - let them naturally cycle out
+        createDesertObjects();
         return;
     }
     
@@ -2403,7 +2364,7 @@ function updateSceneTransition() {
     scene.background.copy(currentSkyColor).lerp(nextSkyColor, eased);
     
     // Gradually create new scene objects during transition
-    if (Math.random() < 0.1) { // 10% chance each frame to create a new object
+    if (DEBUG.toggles.showSceneObjects.value && DEBUG.sceneObjectsState[scenes[nextSceneIndex]] && desertObjects.length < DEBUG.variables.objectDensity.value && Math.random() < 1 - Math.pow(0.9, frameScale)) { // Rate normalized to 60 FPS to create a new object
         const newObject = sceneObjects[scenes[nextSceneIndex]].createObject();
         newObject.position.z = camera.position.z - 400 - Math.random() * 200; // Place further back
         
@@ -2439,7 +2400,7 @@ function animateRoad() {
     // Move the main road
     roadSegments.forEach(segment => {
         if (!segment) return;
-        segment.position.z += speed;
+        segment.position.z += speed * frameScale;
         
         // Reset road when it's far behind the camera
         const roadEndPosition = segment.position.z + roadLength * segmentCount * 4;
@@ -2452,7 +2413,7 @@ function animateRoad() {
     // Move and reset the lines with the same logic
     [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
         if (line) {
-            line.position.z += speed;
+            line.position.z += speed * frameScale;
             const lineEndPosition = line.position.z + roadLength * segmentCount * 4;
             if (lineEndPosition < camera.position.z + 200) {
                 // Position the lines at z=0 relative to the camera
@@ -2463,98 +2424,28 @@ function animateRoad() {
 }
 
 function animateSpecks() {
-    // If specks array is empty and toggle is on, create initial specks
-    if (specks.length === 0 && DEBUG.toggles.showSpecks.value) {
-        createSpecks();
-        return;
-    }
-
-    // Remove specks if toggle is off
     if (!DEBUG.toggles.showSpecks.value) {
-        specks.forEach(speck => {
-            if (speck) {
-                scene.remove(speck);
-                speck.geometry.dispose();
-                speck.material.dispose();
-            }
-        });
-        specks = [];
+        if (speckMesh) {
+            removeScenery(speckMesh);
+            speckMesh = null;
+            specks = [];
+        }
         return;
     }
-
-    const specksToRemove = [];
-    specks.forEach(speck => {
-        if (!speck) return;
-        
-        speck.position.z += speed;
-        
-        // Remove specks that are too far behind the camera
-        if (speck.position.z > camera.position.z + 50) {
-            specksToRemove.push(speck);
+    const count = Math.max(0, Math.floor(DEBUG.variables.speckCount.value));
+    if (specks.length !== count) createSpecks();
+    if (!speckMesh) return;
+    let colorsChanged = false;
+    for (let i = 0; i < specks.length; i++) {
+        specks[i].z += speed * frameScale;
+        if (specks[i].z > camera.position.z + 50) {
+            resetSpeck(i, camera.position.z - 400);
+            colorsChanged = true;
         }
-    });
-
-    // Clean up removed specks
-    specksToRemove.forEach(speck => {
-        const index = specks.indexOf(speck);
-        if (index !== -1) {
-            scene.remove(speck);
-            speck.geometry.dispose();
-            speck.material.dispose();
-            specks.splice(index, 1);
-        }
-    });
-
-    // Calculate how many specks to create to maintain the count
-    const targetSpeckCount = DEBUG.variables.speckCount.value;
-    const speckDeficit = targetSpeckCount - specks.length;
-    
-    // Don't create too many specks in a single frame to avoid performance issues
-    const maxNewSpecksPerFrame = Math.min(speckDeficit, 50);
-    
-    // Create new specks to maintain count
-    if (speckDeficit > 0) {
-        const speckGeometry = new THREE.SphereGeometry(0.1, 4, 4);
-        
-        // Determine which palette to use based on transition state
-        let currentPalette, nextPalette;
-        if (isSceneTransitioning) {
-            currentPalette = palettes[scenes[currentSceneIndex]];
-            nextPalette = palettes[scenes[nextSceneIndex]];
-        } else {
-            currentPalette = palettes[scenes[currentSceneIndex]];
-        }
-
-        for (let i = 0; i < maxNewSpecksPerFrame; i++) {
-            // During transition, gradually increase chance of using next scene's palette
-            // as the transition progresses
-            let speckColor;
-            if (isSceneTransitioning && Math.random() < sceneTransitionProgress * 1.5) {
-                // Use next scene's palette (with 1.5x multiplier to start earlier)
-                speckColor = nextPalette[Math.floor(Math.random() * nextPalette.length)];
-            } else {
-                // Use current scene's palette
-                speckColor = currentPalette[Math.floor(Math.random() * currentPalette.length)];
-            }
-            
-            const speckMaterial = new THREE.MeshBasicMaterial({ 
-                color: speckColor,
-                transparent: true,
-                opacity: 0.8,
-                depthWrite: false
-            });
-            
-            const speck = new THREE.Mesh(speckGeometry, speckMaterial);
-            speck.position.z = camera.position.z - 400;
-            const side = Math.random() < 0.5 ? -1 : 1;
-            const distance = roadWidth / 2 + 5 + Math.random() * 200;
-            speck.position.x = side * distance;
-            speck.position.y = 0;
-            
-            scene.add(speck);
-            specks.push(speck);
-        }
+        updateSpeckTransform(i);
     }
+    speckMesh.instanceMatrix.needsUpdate = true;
+    if (colorsChanged) speckMesh.instanceColor.needsUpdate = true;
 }
 
 function createClouds() {
@@ -2615,7 +2506,7 @@ function createClouds() {
 function animateClouds() {
     clouds.forEach(cloud => {
         // Move cloud forward with scene
-        cloud.position.z += speed * 0.5; // Clouds move slower than ground
+        cloud.position.z += speed * frameScale * 0.5; // Clouds move slower than ground
         
         // Gentle sideways drift
         cloud.position.x = cloud.userData.originalX + Math.sin(Date.now() * 0.0001) * 10;
@@ -2636,8 +2527,15 @@ function animateClouds() {
 }
 
 // Performance monitoring
+let stats; // Global stats variable
+
 function initStats() {
-    const stats = new Stats();
+    if (typeof Stats === 'undefined') {
+        console.warn('Stats.js not loaded, FPS counter disabled');
+        return null;
+    }
+    
+    stats = new Stats();
     stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
     document.body.appendChild(stats.dom);
     return stats;
@@ -2646,7 +2544,11 @@ function initStats() {
 function setupEventListeners() {
     try {
         window.addEventListener('keydown', (e) => {
-            keysPressed[e.key] = true;
+            if (e.target instanceof HTMLElement &&
+                (e.target.matches('input, textarea, select') || e.target.isContentEditable)) return;
+            if (e.key.startsWith('Arrow')) e.preventDefault();
+            keysPressed[e.key.toLowerCase()] = true;
+            if (e.repeat) return;
             
             // Toggle debug menu with backtick
             if (e.key === '`' || e.key === '~') {
@@ -2658,12 +2560,8 @@ function setupEventListeners() {
             
             // Toggle day/night with 'n' key
             if (e.key === 'n' || e.key === 'N') {
-                if (!isTransitioning) {
-                    isTransitioning = true;
-                    transitionProgress = 0;
-                    transitionDirection = isNight ? -1 : 1;
-                    log(`Starting transition from ${isNight ? 'night to day' : 'day to night'}`, 'info');
-                }
+                dayNightCycle = isNight ? Math.PI / 2 : Math.PI * 1.5;
+                log(`Changed to ${isNight ? 'day' : 'night'}`, 'info');
             }
             
             // Force scene change with 'm' key
@@ -2694,9 +2592,13 @@ function setupEventListeners() {
         });
         
         window.addEventListener('keyup', (e) => {
-            keysPressed[e.key] = false;
+            keysPressed[e.key.toLowerCase()] = false;
         });
         
+        window.addEventListener('blur', () => {
+            Object.keys(keysPressed).forEach(key => delete keysPressed[key]);
+        });
+
         // Handle window resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -2709,22 +2611,23 @@ function setupEventListeners() {
 }
 
 function updateCamera() {
+    const moveSpeed = DEBUG.variables.moveSpeed.value * frameScale;
     // Forward/Backward movement
-    if (keysPressed['w'] || keysPressed['W'] || keysPressed['ArrowUp']) {
+    if (keysPressed['w'] || keysPressed['W'] || keysPressed['arrowUp']) {
         camera.position.z -= moveSpeed;
         cameraTarget.z -= moveSpeed;
     }
-    if (keysPressed['s'] || keysPressed['S'] || keysPressed['ArrowDown']) {
+    if (keysPressed['s'] || keysPressed['S'] || keysPressed['arrowDown']) {
         camera.position.z += moveSpeed;
         cameraTarget.z += moveSpeed;
     }
     
     // Left/Right movement
-    if (keysPressed['a'] || keysPressed['A'] || keysPressed['ArrowLeft']) {
+    if (keysPressed['a'] || keysPressed['A'] || keysPressed['arrowLeft']) {
         camera.position.x -= moveSpeed;
         cameraTarget.x -= moveSpeed;
     }
-    if (keysPressed['d'] || keysPressed['D'] || keysPressed['ArrowRight']) {
+    if (keysPressed['d'] || keysPressed['D'] || keysPressed['arrowRight']) {
         camera.position.x += moveSpeed;
         cameraTarget.x += moveSpeed;
     }
@@ -2810,7 +2713,7 @@ function createVisibilitySection() {
     sceneTogglesDiv.innerHTML = '<div style="font-size: 12px; margin-bottom: 10px;">Scene-Specific Objects</div>';
     
     scenes.forEach(scene => {
-        const toggleContainer = document.createElement('div');
+        const toggleContainer = document.createElement('label');
         toggleContainer.style.cssText = `
             display: flex;
             align-items: center;
@@ -2823,13 +2726,13 @@ function createVisibilitySection() {
         checkbox.checked = DEBUG.sceneObjectsState[scene];
         checkbox.id = `toggle-${scene}-objects`;
         
-        const label = document.createElement('label');
+        const label = document.createElement('span');
         label.textContent = scene.charAt(0).toUpperCase() + scene.slice(1);
-        label.htmlFor = `toggle-${scene}-objects`;
         label.style.fontSize = '12px';
         
         checkbox.addEventListener('change', (e) => {
             DEBUG.sceneObjectsState[scene] = e.target.checked;
+            createDesertObjects();
             log(`Toggled ${scene} objects to ${e.target.checked}`, 'info');
         });
         
@@ -2937,25 +2840,9 @@ function createPresetsSection() {
     return section;
 }
 
-// Add stars when settings change (now adds instead of replacing)
 function updateStars() {
-    try {
-        // Turn on stars toggle if it's off
-        if (!DEBUG.toggles.showStars.value) {
-            DEBUG.toggles.showStars.value = true;
-            // Update the UI toggle if it exists
-            const toggle = document.getElementById('toggle-showStars');
-            if (toggle) toggle.checked = true;
-        }
-        
-        // Add stars without clearing existing ones
-        addStars(Math.floor(DEBUG.variables.starCount.value / 2)); // Add half the configured number each time
-        
-        log('Additional stars added', 'info');
-    } catch (error) {
-        console.error('Error adding stars:', error);
-        log('Failed to add stars: ' + error.message, 'error');
-    }
+    createStars();
+    log('Star settings applied', 'info');
 }
 
 // Helper function to create a skyscraper for the city scene
@@ -2973,10 +2860,10 @@ function createSkyscraper(mountain, distanceFromRoad) {
     
     // Skip very distant buildings
     if (distanceFromCamera > 1200) {
-        // For very distant buildings, just create a simple box without windows
-        const height = Math.random() * 70 + 30;
-        const width = Math.random() * 12 + 8;
-        const depth = Math.random() * 12 + 8;
+        // For very distant buildings, create taller horizon buildings
+        const height = Math.random() * 120 + 80; // Taller for better horizon effect
+        const width = Math.random() * 20 + 15;   // Wider for more presence
+        const depth = Math.random() * 20 + 15;
         
         const buildingGeo = new THREE.BoxGeometry(width, height, depth);
         const buildingColor = cityPalette[Math.floor(Math.random() * cityPalette.length)];
@@ -2988,10 +2875,10 @@ function createSkyscraper(mountain, distanceFromRoad) {
         return;
     }
     
-    // For closer buildings, create a more detailed structure
-    const height = Math.random() * 80 + 40;
-    const width = Math.random() * 15 + 10;
-    const depth = Math.random() * 15 + 10;
+    // For closer buildings, create a more detailed structure - taller for skyline effect
+    const height = Math.random() * 120 + 60; // Taller buildings for impressive skyline
+    const width = Math.random() * 20 + 15;   // Wider for better proportions
+    const depth = Math.random() * 20 + 15;
     
     // Choose a random building style
     const buildingStyle = Math.floor(Math.random() * 3);
@@ -3199,8 +3086,34 @@ function createOfficeBuilding(mountain, width, depth, height, cityPalette) {
     }
 }
 
-// Helper function to create a mountain for non-city scenes
-function createSceneMountain(mountain, distanceFromRoad) {
+// Create mountain chains with connected peaks and height variation
+function createMountainChain(mountain, distanceFromRoad, chainIndex, totalChains) {
+    const currentScene = scenes[currentSceneIndex];
+    
+    // Create multiple connected peaks with varying heights
+    const peaksInChain = 2 + Math.floor(Math.random() * 3); // 2-4 peaks per chain
+    const baseHeight = 60 + (chainIndex / totalChains) * 40; // Height varies across the range
+    
+    for (let peakIndex = 0; peakIndex < peaksInChain; peakIndex++) {
+        const peakGroup = new THREE.Group();
+        
+        // Position peaks with some offset for natural look
+        peakGroup.position.x = (peakIndex - peaksInChain/2) * 25;
+        peakGroup.position.z = peakIndex * 20;
+        
+        // Vary height within the chain
+        const heightVariation = Math.sin(peakIndex * 1.5) * 20 + Math.random() * 30;
+        const peakHeight = baseHeight + heightVariation;
+        
+        // Create the individual mountain peak with scene-specific features
+        createSceneMountainWithFeatures(peakGroup, distanceFromRoad, peakHeight, currentScene);
+        
+        mountain.add(peakGroup);
+    }
+}
+
+// Helper function to create a mountain for non-city scenes with scene-specific features
+function createSceneMountainWithFeatures(mountain, distanceFromRoad, customHeight, currentScene) {
     // Scene-specific color palettes for mountains
     const mountainPalettes = {
         desert: [
@@ -3223,13 +3136,26 @@ function createSceneMountain(mountain, distanceFromRoad) {
         ]
     };
 
-    const currentScene = scenes[currentSceneIndex];
     const currentPalette = mountainPalettes[currentScene];
     
-    // Create main mountain shape with more detail
-    const height = Math.random() * 40 + 30; // Slightly smaller mountains
-    const baseWidth = Math.random() * 20 + 10; // Base width
-    const baseDepth = Math.random() * 20 + 10;
+    // Use custom height if provided, otherwise generate random height - validate inputs
+    let height = customHeight || (Math.random() * 80 + 60);
+    let baseWidth = Math.random() * 40 + 30;
+    let baseDepth = Math.random() * 40 + 30;
+    
+    // Validate and fix any invalid values
+    if (!isFinite(height) || height <= 0) {
+        console.warn('Invalid mountain height, using fallback');
+        height = 60;
+    }
+    if (!isFinite(baseWidth) || baseWidth <= 0) {
+        console.warn('Invalid mountain base width, using fallback');
+        baseWidth = 30;
+    }
+    if (!isFinite(baseDepth) || baseDepth <= 0) {
+        console.warn('Invalid mountain base depth, using fallback');
+        baseDepth = 30;
+    }
     
     // More segments for better detail
     const segments = 12;
@@ -3244,11 +3170,22 @@ function createSceneMountain(mountain, distanceFromRoad) {
         const radius = baseWidth * (0.9 + Math.random() * 0.2); // Less random variation
         const noiseX = (Math.random() - 0.5) * 2; // Reduced noise
         const noiseZ = (Math.random() - 0.5) * 2;
+        
+        // Validate values to prevent NaN
+        const x = Math.cos(angle) * radius + noiseX;
+        const y = 0;
+        const z = Math.sin(angle) * radius + noiseZ;
+        
+        if (!isFinite(x) || !isFinite(y) || !isFinite(z)) {
+            console.warn('Invalid vertex values detected, using fallback');
         vertices.push(
-            Math.cos(angle) * radius + noiseX,
+                Math.cos(angle) * baseWidth,
             0,
-            Math.sin(angle) * radius + noiseZ
+                Math.sin(angle) * baseWidth
         );
+        } else {
+            vertices.push(x, y, z);
+        }
         uvs.push(j / segments, 0);
     }
     
@@ -3262,21 +3199,37 @@ function createSceneMountain(mountain, distanceFromRoad) {
             const angle = (j / segments) * Math.PI * 2;
             const noiseX = (Math.random() - 0.5) * (2 * (1 - ring / ringCount));
             const noiseZ = (Math.random() - 0.5) * (2 * (1 - ring / ringCount));
+            
+            // Validate values to prevent NaN
+            const x = Math.cos(angle) * ringRadius + noiseX;
+            const y = ringHeight;
+            const z = Math.sin(angle) * ringRadius + noiseZ;
+            
+            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) {
+                console.warn('Invalid ring vertex values detected, using fallback');
             vertices.push(
-                Math.cos(angle) * ringRadius + noiseX,
+                    Math.cos(angle) * ringRadius,
                 ringHeight,
-                Math.sin(angle) * ringRadius + noiseZ
+                    Math.sin(angle) * ringRadius
             );
+            } else {
+                vertices.push(x, y, z);
+            }
             uvs.push(j / segments, ring / ringCount);
         }
     }
     
-    // Add peak vertex
+    // Add peak vertex with validation
+    if (!isFinite(height)) {
+        console.warn('Invalid height detected, using fallback');
+        vertices.push(0, baseWidth, 0);
+    } else {
     vertices.push(0, height, 0);
+    }
     uvs.push(0.5, 1);
     
     // Create faces between rings
-    for (let ring = 0; ring < ringCount; ring++) {
+    for (let ring = 0; ring < ringCount - 1; ring++) {
         const currentRing = ring * segments;
         const nextRing = (ring + 1) * segments;
         
@@ -3347,39 +3300,500 @@ function createSceneMountain(mountain, distanceFromRoad) {
             opacity: 0.8
         });
     } else {
-        // For other scenes, use a single color from the palette
+        // For other scenes, use a single color from the palette with atmospheric perspective
         mountainColor = currentPalette[Math.floor(Math.random() * currentPalette.length)];
+        
+        // Calculate atmospheric perspective based on distance
+        const mountainDistance = Math.abs(mountain.position.x);
+        const maxDistance = mountainZoneStart + mountainZoneWidth;
+        const distanceFactor = Math.min(1, mountainDistance / maxDistance);
+        
+        // Mix mountain color with sky color for atmospheric haze
+        const currentState = sceneStates[scenes[currentSceneIndex]];
+        const skyColor = currentState.dayColors.sky;
+        const atmosphericColor = mountainColor.clone().lerp(skyColor, distanceFactor * 0.4);
+        
         mountainMaterial = new THREE.MeshBasicMaterial({
-            color: mountainColor,
+            color: atmosphericColor,
             side: THREE.DoubleSide,
             transparent: true,
-            opacity: 0.75
+            opacity: 0.75 - (distanceFactor * 0.3) // More distant = more transparent
         });
     }
     
     const mountainMesh = new THREE.Mesh(geometry, mountainMaterial);
+    mountain.add(mountainMesh);
     
-    const edgesGeometry = new THREE.EdgesGeometry(geometry, 15);
-    let edgesColor;
-    
-    if (currentScene === 'snowy') {
-        edgesColor = new THREE.Color(0xFFFFFF);
-    } else {
-        edgesColor = mountainColor ? mountainColor.clone().multiplyScalar(1.2) : new THREE.Color(0xFFFFFF);
+    // Create edges with comprehensive validation to prevent NaN issues
+    try {
+        // Validate geometry thoroughly before creating edges
+        if (geometry.attributes.position && geometry.attributes.position.array) {
+            const positions = geometry.attributes.position.array;
+            let hasValidPositions = true;
+            let validVertexCount = 0;
+            
+            // Check for NaN, infinity, or extremely large values
+            for (let i = 0; i < positions.length; i += 3) {
+                const x = positions[i];
+                const y = positions[i + 1];  
+                const z = positions[i + 2];
+                
+                if (!isFinite(x) || !isFinite(y) || !isFinite(z) || 
+                    Math.abs(x) > 10000 || Math.abs(y) > 10000 || Math.abs(z) > 10000) {
+                    hasValidPositions = false;
+                    console.warn(`Invalid vertex at index ${i/3}: (${x}, ${y}, ${z})`);
+                    break;
+                }
+                validVertexCount++;
+            }
+            
+            // Ensure we have enough valid vertices for a mountain
+            if (hasValidPositions && validVertexCount >= 4 && geometry.index && geometry.index.count > 0) {
+                // Force geometry to recompute its bounds before edge creation
+                geometry.computeBoundingBox();
+                geometry.computeBoundingSphere();
+                
+                // Check if bounding sphere is valid
+                if (geometry.boundingSphere && isFinite(geometry.boundingSphere.radius) && geometry.boundingSphere.radius > 0) {
+                    const edgesGeometry = new THREE.EdgesGeometry(geometry, 15);
+                    
+                    // Validate edges geometry as well
+                    if (edgesGeometry.attributes.position && edgesGeometry.attributes.position.array.length > 0) {
+                        let edgesColor;
+                        
+                        if (currentScene === 'snowy') {
+                            edgesColor = new THREE.Color(0xFFFFFF);
+                        } else {
+                            edgesColor = mountainColor ? mountainColor.clone().multiplyScalar(1.2) : new THREE.Color(0xFFFFFF);
+                        }
+                        
+                        const edgesMaterial = new THREE.LineBasicMaterial({
+                            color: edgesColor,
+                            transparent: true,
+                            opacity: 0.5
+                        });
+                        
+                        const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+                        mountain.add(edges);
+                    } else {
+                        console.warn('EdgeGeometry creation failed - no position data');
+                    }
+                } else {
+                    console.warn('Invalid bounding sphere, skipping edges');
+                }
+            } else {
+                console.warn(`Invalid mountain geometry: valid=${hasValidPositions}, vertices=${validVertexCount}, hasIndex=${!!geometry.index}`);
+            }
+        } else {
+            console.warn('No position attribute in geometry');
+        }
+    } catch (error) {
+        console.warn('Failed to create mountain edges:', error);
+        // Continue without edges if there's an error
     }
     
-    const edgesMaterial = new THREE.LineBasicMaterial({
-        color: edgesColor,
+         // Skip scene-specific features to maintain clean wireframe aesthetic
+     console.log(`Created ${currentScene} mountain`);
+}
+
+// Add scene-specific features to mountains
+function addSceneSpecificMountainFeatures(mountain, height, baseWidth, currentScene) {
+    switch(currentScene) {
+        case 'snowy':
+            addSnowCaps(mountain, height, baseWidth);
+            addIcyDetails(mountain, height);
+            break;
+        case 'forest':
+            addForestCoverage(mountain, height, baseWidth);
+            addTreesOnSlopes(mountain, height);
+            break;
+        case 'desert':
+            addDesertVegetation(mountain, baseWidth);
+            addRockFormations(mountain, height);
+            break;
+        default:
+            addGenericMountainDetails(mountain, height);
+    }
+}
+
+// Add snow caps to snowy mountains
+function addSnowCaps(mountain, height, baseWidth) {
+    const snowCapHeight = height * 0.3; // Snow covers top 30% of mountain
+    const snowCapRadius = baseWidth * 0.6;
+    
+    const snowGeo = new THREE.SphereGeometry(snowCapRadius, 8, 8, 0, Math.PI * 2, 0, Math.PI * 0.6);
+    const snowMat = new THREE.MeshBasicMaterial({
+        color: 0xFFFFFF,
         transparent: true,
-        opacity: 0.5
+        opacity: 0.9
     });
     
-    const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+    const snowCap = new THREE.Mesh(snowGeo, snowMat);
+    snowCap.position.y = height - snowCapHeight * 0.5;
+    mountain.add(snowCap);
+}
+
+// Add icy details to snowy mountains
+function addIcyDetails(mountain, height) {
+    const icicleCount = 3 + Math.floor(Math.random() * 4);
     
-    mountain.add(mountainMesh);
-    mountain.add(edges);
+    for (let i = 0; i < icicleCount; i++) {
+        const icicleGeo = new THREE.ConeGeometry(0.5 + Math.random(), 3 + Math.random() * 2, 6);
+        const icicleMat = new THREE.MeshBasicMaterial({
+            color: 0xE0FFFF,
+            transparent: true,
+            opacity: 0.8
+        });
+        
+        const icicle = new THREE.Mesh(icicleGeo, icicleMat);
+        icicle.position.x = (Math.random() - 0.5) * 20;
+        icicle.position.y = height * 0.6 + Math.random() * height * 0.3;
+        icicle.position.z = (Math.random() - 0.5) * 20;
+        icicle.rotation.z = (Math.random() - 0.5) * 0.4;
+        
+        mountain.add(icicle);
+    }
+}
+
+// Add forest coverage to forest mountains
+function addForestCoverage(mountain, height, baseWidth) {
+    const treeCount = 8 + Math.floor(Math.random() * 12);
     
-    console.log(`Created ${currentScene} mountain`);
+    for (let i = 0; i < treeCount; i++) {
+        const treeHeight = 3 + Math.random() * 4;
+        
+        // Tree trunk
+        const trunkGeo = new THREE.CylinderGeometry(0.2, 0.3, treeHeight * 0.4, 6);
+        const trunkMat = new THREE.MeshBasicMaterial({ color: 0x4A3728 });
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+        
+        // Tree foliage
+        const foliageGeo = new THREE.ConeGeometry(1.5, treeHeight * 0.7, 8);
+        const foliageColors = [0x228B22, 0x006400, 0x2E8B57, 0x556B2F];
+        const foliageMat = new THREE.MeshBasicMaterial({ 
+            color: foliageColors[Math.floor(Math.random() * foliageColors.length)]
+        });
+        const foliage = new THREE.Mesh(foliageGeo, foliageMat);
+        
+        // Position tree on mountain slope
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Math.random() * baseWidth * 0.8;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        const y = Math.random() * height * 0.4; // Trees on lower slopes
+        
+        trunk.position.set(x, y + treeHeight * 0.2, z);
+        foliage.position.set(x, y + treeHeight * 0.6, z);
+        
+        mountain.add(trunk);
+        mountain.add(foliage);
+    }
+}
+
+// Add trees scattered on mountain slopes
+function addTreesOnSlopes(mountain, height) {
+    const slopeTreeCount = 4 + Math.floor(Math.random() * 6);
+    
+    for (let i = 0; i < slopeTreeCount; i++) {
+        const treeGeo = new THREE.ConeGeometry(0.8, 2.5, 6);
+        const treeMat = new THREE.MeshBasicMaterial({ color: 0x228B22 });
+        const tree = new THREE.Mesh(treeGeo, treeMat);
+        
+        tree.position.x = (Math.random() - 0.5) * 30;
+        tree.position.y = Math.random() * height * 0.6;
+        tree.position.z = (Math.random() - 0.5) * 30;
+        
+        mountain.add(tree);
+    }
+}
+
+// Add desert vegetation to desert mountains
+function addDesertVegetation(mountain, baseWidth) {
+    const vegetationCount = 3 + Math.floor(Math.random() * 5);
+    
+    for (let i = 0; i < vegetationCount; i++) {
+        if (Math.random() < 0.7) {
+            // Small cactus
+            const cactusGeo = new THREE.CylinderGeometry(0.3, 0.3, 2, 8);
+            const cactusMat = new THREE.MeshBasicMaterial({ color: 0x228B22 });
+            const cactus = new THREE.Mesh(cactusGeo, cactusMat);
+            
+            cactus.position.x = (Math.random() - 0.5) * baseWidth;
+            cactus.position.y = 1;
+            cactus.position.z = (Math.random() - 0.5) * baseWidth;
+            
+            mountain.add(cactus);
+        } else {
+            // Desert shrub
+            const shrubGeo = new THREE.SphereGeometry(0.5, 8, 8);
+            const shrubMat = new THREE.MeshBasicMaterial({ color: 0x556B2F });
+            const shrub = new THREE.Mesh(shrubGeo, shrubMat);
+            
+            shrub.position.x = (Math.random() - 0.5) * baseWidth;
+            shrub.position.y = 0.5;
+            shrub.position.z = (Math.random() - 0.5) * baseWidth;
+            
+            mountain.add(shrub);
+        }
+    }
+}
+
+// Add rock formations to desert mountains
+function addRockFormations(mountain, height) {
+    const rockCount = 2 + Math.floor(Math.random() * 4);
+    
+    for (let i = 0; i < rockCount; i++) {
+        const rockGeo = new THREE.DodecahedronGeometry(1 + Math.random() * 2);
+        const rockMat = new THREE.MeshBasicMaterial({ 
+            color: new THREE.Color(0x8B4513).lerp(new THREE.Color(0x696969), Math.random())
+        });
+        const rock = new THREE.Mesh(rockGeo, rockMat);
+        
+        rock.position.x = (Math.random() - 0.5) * 25;
+        rock.position.y = Math.random() * height * 0.7;
+        rock.position.z = (Math.random() - 0.5) * 25;
+        rock.rotation.set(Math.random(), Math.random(), Math.random());
+        
+        mountain.add(rock);
+    }
+}
+
+// Add generic mountain details
+function addGenericMountainDetails(mountain, height) {
+    // Add some basic rock outcroppings
+    const rockCount = 1 + Math.floor(Math.random() * 3);
+    
+    for (let i = 0; i < rockCount; i++) {
+        const rockGeo = new THREE.BoxGeometry(2 + Math.random(), 1 + Math.random(), 2 + Math.random());
+        const rockMat = new THREE.MeshBasicMaterial({ color: 0x696969 });
+        const rock = new THREE.Mesh(rockGeo, rockMat);
+        
+        rock.position.x = (Math.random() - 0.5) * 20;
+        rock.position.y = Math.random() * height * 0.8;
+        rock.position.z = (Math.random() - 0.5) * 20;
+        
+        mountain.add(rock);
+    }
+}
+
+// Create background horizon planes for seamless coverage
+function createHorizonPlanes(isCity) {
+    const currentScene = scenes[currentSceneIndex];
+    
+    // Create distant horizon plane on both sides
+    for (let side = -1; side <= 1; side += 2) {
+        const horizonGroup = new THREE.Group();
+        
+        // Position far in the distance
+        const horizonDistance = mountainZoneStart + mountainZoneWidth * 1.2;
+        horizonGroup.position.x = side * horizonDistance;
+        horizonGroup.position.z = camera.position.z - 800;
+        
+        if (isCity) {
+            // Create distant city skyline silhouette
+            createDistantSkylineSilhouette(horizonGroup);
+        } else {
+            // Create distant mountain range silhouette
+            createDistantMountainRange(horizonGroup, currentScene);
+        }
+        
+        // Store reference and add to scene
+        horizonGroup.userData = {
+            scene: currentScene,
+            type: 'horizon',
+            side: side
+        };
+        
+        scene.add(horizonGroup);
+        mountains.push(horizonGroup);
+    }
+}
+
+// Create a distant city skyline silhouette
+function createDistantSkylineSilhouette(group) {
+    const buildingCount = 15;
+    const totalWidth = 200;
+    const buildingWidth = totalWidth / buildingCount;
+    
+    for (let i = 0; i < buildingCount; i++) {
+        const height = Math.random() * 60 + 40;
+        const geo = new THREE.BoxGeometry(buildingWidth * 1.2, height, 20);
+        
+        // Use darker colors for silhouette effect with atmospheric perspective
+        const color = new THREE.Color(0x333333).lerp(new THREE.Color(0x666666), Math.random());
+        const mat = new THREE.MeshBasicMaterial({ 
+            color: color,
+            transparent: true,
+            opacity: 0.4 // Atmospheric haze effect
+        });
+        
+        const building = new THREE.Mesh(geo, mat);
+        building.position.x = (i - buildingCount/2) * buildingWidth;
+        building.position.y = height / 2;
+        
+        group.add(building);
+    }
+}
+
+// Create a distant mountain range silhouette
+function createDistantMountainRange(group, currentScene) {
+    const peakCount = 8;
+    const rangeWidth = 300;
+    
+    // Create a continuous mountain silhouette
+    const points = [];
+    for (let i = 0; i <= peakCount; i++) {
+        const x = (i / peakCount - 0.5) * rangeWidth;
+        const baseHeight = 30 + Math.sin(i * 0.5) * 20; // Smooth variation
+        const height = baseHeight + Math.random() * 40;
+        points.push(new THREE.Vector2(x, height));
+    }
+    
+    // Add base points to close the shape
+    points.unshift(new THREE.Vector2(-rangeWidth/2, 0));
+    points.push(new THREE.Vector2(rangeWidth/2, 0));
+    
+    const shape = new THREE.Shape(points);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: 50,
+        bevelEnabled: false
+    });
+    
+    // Scene-specific colors with atmospheric perspective
+    let color;
+    switch(currentScene) {
+        case 'desert':
+            color = new THREE.Color(0x8B4513).lerp(new THREE.Color(0x87CEEB), 0.3); // Brown tinted with sky blue
+            break;
+        case 'forest':
+            color = new THREE.Color(0x228B22).lerp(new THREE.Color(0x87CEEB), 0.3); // Green tinted with sky blue
+            break;
+        case 'snowy':
+            color = new THREE.Color(0xCCCCCC).lerp(new THREE.Color(0x87CEEB), 0.2); // Light gray tinted with sky blue
+            break;
+        default:
+            color = new THREE.Color(0x666666).lerp(new THREE.Color(0x87CEEB), 0.3);
+    }
+    
+    const mat = new THREE.MeshBasicMaterial({ 
+        color: color,
+        transparent: true,
+        opacity: 0.5, // Strong atmospheric haze effect
+        side: THREE.DoubleSide
+    });
+    
+    const mountainRange = new THREE.Mesh(geo, mat);
+    mountainRange.position.y = 0;
+    
+    group.add(mountainRange);
+}
+
+// Update mountain lighting based on day/night cycle
+function updateMountainLighting(dayFactor) {
+    const currentState = sceneStates[scenes[currentSceneIndex]];
+    const skyColor = currentState.dayColors.sky.clone().lerp(currentState.nightColors.sky, 1 - dayFactor);
+    
+    mountains.forEach(mountain => {
+        if (!mountain || !mountain.userData) return;
+        
+        // Update all materials in the mountain group
+        mountain.traverse((child) => {
+            if (child.isMesh && child.material) {
+                const material = child.material;
+                
+                // Skip if this is a snow cap or icicle (keep them bright)
+                if (material.color && (material.color.getHex() === 0xFFFFFF || material.color.getHex() === 0xE0FFFF)) {
+                    // Apply subtle night dimming to snow/ice
+                    material.opacity = Math.max(0.6, 0.9 - (1 - dayFactor) * 0.3);
+                    return;
+                }
+                
+                // Apply day/night lighting to other materials
+                if (material.color && material.userData && material.userData.originalColor) {
+                    // Restore from stored original color
+                    const originalColor = material.userData.originalColor;
+                    const nightColor = originalColor.clone().multiplyScalar(0.3); // Much darker at night
+                    const currentColor = originalColor.clone().lerp(nightColor, 1 - dayFactor);
+                    
+                    // Add atmospheric perspective based on distance
+                    if (mountain.userData.type === 'horizon') {
+                        currentColor.lerp(skyColor, 0.6); // Strong atmospheric effect for horizon
+                    } else {
+                        const distance = Math.abs(mountain.position.x);
+                        const maxDistance = mountainZoneStart + mountainZoneWidth;
+                        const distanceFactor = Math.min(1, distance / maxDistance);
+                        currentColor.lerp(skyColor, distanceFactor * 0.4);
+                    }
+                    
+                    material.color.copy(currentColor);
+                } else if (material.color) {
+                    // Store original color if not already stored
+                    if (!material.userData) material.userData = {};
+                    if (!material.userData.originalColor) {
+                        material.userData.originalColor = material.color.clone();
+                    }
+                    
+                    // Apply lighting for first time
+                    const originalColor = material.userData.originalColor;
+                    const nightColor = originalColor.clone().multiplyScalar(0.3);
+                    const currentColor = originalColor.clone().lerp(nightColor, 1 - dayFactor);
+                    
+                    // Add atmospheric perspective
+                    if (mountain.userData.type === 'horizon') {
+                        currentColor.lerp(skyColor, 0.6);
+                    } else {
+                        const distance = Math.abs(mountain.position.x);
+                        const maxDistance = mountainZoneStart + mountainZoneWidth;
+                        const distanceFactor = Math.min(1, distance / maxDistance);
+                        currentColor.lerp(skyColor, distanceFactor * 0.4);
+                    }
+                    
+                    material.color.copy(currentColor);
+                }
+                
+                // Adjust opacity for night atmosphere
+                if (material.transparent) {
+                    const baseOpacity = material.userData.originalOpacity || material.opacity;
+                    if (!material.userData.originalOpacity) {
+                        material.userData.originalOpacity = material.opacity;
+                    }
+                    material.opacity = baseOpacity * (0.7 + dayFactor * 0.3); // Slightly more transparent at night
+                }
+            }
+        });
+        
+        // Add special night effects for snow-capped mountains
+        if (mountain.userData.scene === 'snowy' && dayFactor < 0.5) {
+            addMountainMoonlightEffect(mountain, dayFactor);
+        }
+    });
+}
+
+// Add moonlight effects to snowy mountains at night
+function addMountainMoonlightEffect(mountain, dayFactor) {
+    // Only add effect once per mountain
+    if (mountain.userData.hasNightEffect) return;
+    
+    const moonlightIntensity = Math.max(0, 0.5 - dayFactor); // Stronger effect deeper in night
+    
+    // Add subtle blue tint to represent moonlight on snow
+    mountain.traverse((child) => {
+        if (child.isMesh && child.material && child.material.color) {
+            const color = child.material.color;
+            if (color.getHex() === 0xFFFFFF) { // Snow surfaces
+                const moonlightColor = new THREE.Color(0xCCCCFF); // Pale blue
+                const originalColor = color.clone();
+                color.lerp(moonlightColor, moonlightIntensity * 0.3);
+            }
+        }
+    });
+    
+    mountain.userData.hasNightEffect = true;
+    
+    // Remove night effect flag when day returns
+    if (dayFactor > 0.7) {
+        mountain.userData.hasNightEffect = false;
+    }
 }
 
 // Animation variables

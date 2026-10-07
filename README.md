@@ -22,6 +22,14 @@ This project creates a 3D scene of an endless road stretching through a desert e
 - **Time Cycle**: Toggle between day and night modes
 - **Responsive Design**: Adapts to different screen sizes
 
+## Local preview
+
+Run `python3 -m http.server 8000 --bind 127.0.0.1` from the project directory,
+then open http://127.0.0.1:8000. Refresh the page after changing files.
+
+Ground specks use a single instanced mesh. Movement and scene transitions use
+elapsed time so their speed stays consistent across different refresh rates.
+
 ## Controls
 
 - **WASD/Arrow Keys**: Move camera
