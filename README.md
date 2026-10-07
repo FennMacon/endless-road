@@ -38,6 +38,7 @@ elapsed time so their speed stays consistent across different refresh rates.
 
 - **WASD/Arrow Keys**: Move camera
 - **Mouse Drag**: Look around (OrbitControls)
+- **R Key / View button**: Cycle front, right, back, and left views
 - **N Key**: Toggle between day and night
 - **Mouse Movement**: Show/hide UI elements
 

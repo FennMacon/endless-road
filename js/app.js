@@ -312,7 +312,24 @@ const mountainZoneWidth = 400; // Width of the mountain zone
 // Camera controls
 const moveSpeed = 0.5;
 const keysPressed = {};
-let cameraTarget = new THREE.Vector3(0, 0, -40); // Adjusted to keep the same viewing angle
+let cameraTarget = new THREE.Vector3(2, 0, -40);
+const rearSceneryDistance = 400;
+const viewNames = ['Front', 'Right', 'Back', 'Left'];
+let cameraViewIndex = 0;
+
+function setCameraView(index) {
+    cameraViewIndex = index % viewNames.length;
+    const yaw = cameraViewIndex * Math.PI / 2;
+    cameraTarget.set(camera.position.x + Math.sin(yaw) * 40,
+        camera.position.y - 2.5, camera.position.z - Math.cos(yaw) * 40);
+    camera.lookAt(cameraTarget);
+    const button = document.getElementById('view-cycle');
+    if (button) button.textContent = `View: ${viewNames[cameraViewIndex]} (R)`;
+}
+
+function cycleCameraView() {
+    setCameraView(cameraViewIndex + 1);
+}
 
 // Add at the top with other variables
 let statusDisplay;
@@ -714,6 +731,9 @@ function createCameraSection() {
     const section = document.createElement('div');
     
     // Camera-related variables
+    const viewButton = createButton('View: Front (R)', cycleCameraView);
+    viewButton.id = 'view-cycle';
+    section.appendChild(viewButton);
     const cameraVars = ['moveSpeed', 'speed'];
     addVariableSliders(section, cameraVars);
     
@@ -938,11 +958,11 @@ function applyControlChange(key) {
             } else {
                 // Keep the visible stretch, then let its far end pass the camera.
                 roadSegments.forEach(road => {
-                    road.scale.y = 450 / totalRoadLength;
-                    road.position.z = camera.position.z - 175;
+                    road.scale.y = 800 / totalRoadLength;
+                    road.position.z = camera.position.z;
                 });
                 [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
-                    if (line) { line.scale.z = 450 / totalRoadLength; line.position.z = camera.position.z - 175; }
+                    if (line) { line.scale.z = 800 / totalRoadLength; line.position.z = camera.position.z; }
                 });
             }
             break;
@@ -1026,7 +1046,7 @@ function init() {
         // Initialize camera
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(2, 2.5, 0);
-        cameraTarget = new THREE.Vector3(0, 0, -40); // Adjusted to keep the same viewing angle
+        setCameraView(0);
         camera.lookAt(cameraTarget);
         console.log('Camera initialized successfully');
         
@@ -1263,8 +1283,8 @@ function groundObjectX(spread, side = Math.random() < 0.5 ? -1 : 1) {
         : (Math.random() * 2 - 1) * (clearance + spread);
 }
 
-const speckFieldLength = 450;
-const speckRearOffset = 50;
+const speckFieldLength = 800;
+const speckRearOffset = rearSceneryDistance;
 let activeSpecks = [];
 
 function resetSpeck(index, z) {
@@ -1280,7 +1300,7 @@ function resetSpeck(index, z) {
 
 function updateSpeckTransform(index) {
     speckTransform.position.copy(specks[index]);
-    speckTransform.scale.setScalar(activeSpecks[index] ? DEBUG.variables.speckSize.value / 0.5 : 0);
+    speckTransform.scale.setScalar(activeSpecks[index] ? DEBUG.variables.speckSize.value / 0.5 * rearSceneryFade(specks[index].z - camera.position.z) : 0);
     speckTransform.updateMatrix();
     speckMesh.setMatrixAt(index, speckTransform.matrix);
 }
@@ -1339,7 +1359,7 @@ function createRoad() {
     
     // Position the road starting exactly at z=0 extending forward and backward
     // This places the start of the road directly under the camera (which is now at z=0)
-    road.position.z = -totalRoadLength / 2;
+    road.position.z = camera.position.z + rearSceneryDistance - totalRoadLength / 2;
     
     scene.add(road);
     roadSegments.push(road);
@@ -1368,8 +1388,8 @@ function createRoad() {
     rightEdgeLine = new THREE.Mesh(lineGeometry, whiteMaterial);
     
     // Position edge lines - increased height from 0.1 to 0.15
-    leftEdgeLine.position.set(-roadWidth / 2, 0.15, -totalRoadLength / 2);
-    rightEdgeLine.position.set(roadWidth / 2, 0.15, -totalRoadLength / 2);
+    leftEdgeLine.position.set(-roadWidth / 2, 0.15, camera.position.z + rearSceneryDistance - totalRoadLength / 2);
+    rightEdgeLine.position.set(roadWidth / 2, 0.15, camera.position.z + rearSceneryDistance - totalRoadLength / 2);
     
     // Create center lines
     const centerLineGeometry = new THREE.BoxBufferGeometry(0.15, lineHeight, totalRoadLength);
@@ -1377,8 +1397,8 @@ function createRoad() {
     rightYellowLine = new THREE.Mesh(centerLineGeometry, yellowMaterial);
     
     // Position center lines - increased height from 0.1 to 0.15
-    leftYellowLine.position.set(-0.3, 0.15, -totalRoadLength / 2);
-    rightYellowLine.position.set(0.3, 0.15, -totalRoadLength / 2);
+    leftYellowLine.position.set(-0.3, 0.15, camera.position.z + rearSceneryDistance - totalRoadLength / 2);
+    rightYellowLine.position.set(0.3, 0.15, camera.position.z + rearSceneryDistance - totalRoadLength / 2);
     
     // Add all lines to scene
     scene.add(leftEdgeLine);
@@ -1425,7 +1445,7 @@ function createStreetLamps() {
     if (!DEBUG.toggles.showStreetLamps.value) return;
     for (let i = 0; i < 10; i++) {
         const lamp = createStreetLamp();
-        lamp.position.set((i % 2 === 0 ? -1 : 1) * (roadWidth / 2 + 2), 0, camera.position.z - i * 40);
+        lamp.position.set((i % 2 === 0 ? -1 : 1) * (roadWidth / 2 + 2), 0, camera.position.z + 320 - i * 80);
         scene.add(lamp);
         streetLamps.push(lamp);
     }
@@ -1464,7 +1484,7 @@ function createBuildings() {
         building.position.set(
             (Math.random() < 0.5 ? -1 : 1) * (roadWidth / 2 + 15 + Math.random() * 20),
             0,
-            -i * (roadLength * 4 / buildingCount) - Math.random() * 50
+            camera.position.z + 320 - i * (800 / buildingCount) - Math.random() * 40
         );
         startSceneryFade(building);
         scene.add(building);
@@ -1619,7 +1639,7 @@ function createMountains() {
                 
                 // Position mountains with some overlap for continuity
                 mountain.position.x = side * distanceFromRoad;
-                mountain.position.z = camera.position.z - 400 - i * 150; // Closer spacing for better coverage
+                mountain.position.z = camera.position.z + 300 - i * 150; // Closer spacing for better coverage
                 
                 // Create mountain or skyscraper based on current scene
                 if (isCity) {
@@ -1919,7 +1939,7 @@ function animateStars() {
                 const luminosity = 0.5 + 0.5 * twinkle;
                 
                 // Apply luminosity to RGB values
-                colors[i] = !DEBUG.toggles.showStars.value && starZ > camera.position.z + 50 ? 0 : luminosity;     // R
+                colors[i] = !DEBUG.toggles.showStars.value && starZ > camera.position.z + rearSceneryDistance ? 0 : luminosity;     // R
                 colors[i + 1] = colors[i]; // G
                 colors[i + 2] = colors[i]; // B
             }
@@ -2001,7 +2021,7 @@ function animateStreetLamps() {
     if (!streetLamps.length && DEBUG.toggles.showStreetLamps.value) createStreetLamps();
     streetLamps = streetLamps.map(lamp => {
         lamp.position.z += speed * frameScale;
-        if (lamp.position.z > camera.position.z + 10) {
+        if (lamp.position.z > camera.position.z + rearSceneryDistance) {
             if (!DEBUG.toggles.showStreetLamps.value) { removeScenery(lamp); return null; }
             const x = lamp.position.x;
             removeScenery(lamp);
@@ -2012,7 +2032,7 @@ function animateStreetLamps() {
         }
         updateSceneryFade(lamp);
         const day = Math.max(0, Math.sin(dayNightCycle));
-        lamp.userData.light.intensity = Math.max(0, 0.8 - day) * THREE.MathUtils.smoothstep(lamp.userData.fadeAge, 0, sceneryFadeDuration);
+        lamp.userData.light.intensity = Math.max(0, 0.8 - day) * THREE.MathUtils.smoothstep(lamp.userData.fadeAge, 0, sceneryFadeDuration) * rearSceneryFade(lamp.position.z - camera.position.z);
         return lamp;
     }).filter(Boolean);
 }
@@ -2033,12 +2053,19 @@ function startSceneryFade(object) {
     });
 }
 
+function rearSceneryFade(distanceBehind) {
+    return 1 - THREE.MathUtils.smoothstep(distanceBehind, 250, rearSceneryDistance);
+}
+
 function updateSceneryFade(object, retiring = false) {
     object.userData.fadeAge = Math.min(sceneryFadeDuration, (object.userData.fadeAge ?? sceneryFadeDuration) + deltaMilliseconds);
     const enter = THREE.MathUtils.smoothstep(object.userData.fadeAge, 0, sceneryFadeDuration);
     const exit = retiring ? 1 - THREE.MathUtils.smoothstep(object.userData.retireAge, 0, sceneryFadeDuration) : 1;
     const dayFactor = Math.max(0, Math.sin(dayNightCycle));
     const lighting = object.userData.type ? 0.7 + dayFactor * 0.3 : 1;
+    const rearFade = object.userData.type === 'horizon'
+        ? rearSceneryFade(object.userData.horizonTravel ?? 0)
+        : rearSceneryFade(object.position.z - camera.position.z);
     object.traverse(child => {
         const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
         let layerWeight = 1;
@@ -2047,10 +2074,10 @@ function updateSceneryFade(object, retiring = false) {
         }
         materials.forEach(material => {
             material.userData.originalOpacity ??= material.opacity;
-            material.opacity = material.userData.originalOpacity * enter * exit * lighting * layerWeight;
+            material.opacity = material.userData.originalOpacity * enter * exit * lighting * layerWeight * rearFade;
             // Distant translucent scenery keeps the same depth behavior through
             // the fade endpoint; switching it there makes faces and edges snap.
-            material.depthWrite = !object.userData.type && enter * exit >= 1
+            material.depthWrite = !object.userData.type && enter * exit * rearFade >= 1
                 ? (material.userData.originalDepthWrite ?? material.depthWrite)
                 : false;
         });
@@ -2078,7 +2105,7 @@ function animateBuildings() {
         
         building.position.z += speed * frameScale;
         
-        if (building.position.z > camera.position.z + 10) {
+        if (building.position.z > camera.position.z + rearSceneryDistance) {
             if (!DEBUG.toggles.showBuildings.value) {
                 // Remove building when it passes behind camera if toggle is off
                 removeScenery(building);
@@ -2120,7 +2147,7 @@ function animateDesertObjects() {
             activeCount--;
         }
         if (object.userData.retireAge !== undefined) object.userData.retireAge += deltaMilliseconds;
-        if (object.position.z > camera.position.z + 10 || object.userData.retireAge >= sceneryFadeDuration) {
+        if (object.position.z > camera.position.z + rearSceneryDistance || object.userData.retireAge >= sceneryFadeDuration) {
             if (object.userData.retireAge === undefined) activeCount--;
             removeScenery(object);
         } else {
@@ -2159,7 +2186,8 @@ function animateMountains() {
         // Keep the distant horizon behind the camera instead of recycling it
         // into foreground scenery. Refresh it when the environment changes.
         if (mountain.userData.type === 'horizon' && DEBUG.toggles.showMountains.value) {
-            mountain.position.z = camera.position.z - 800;
+            mountain.position.z = camera.position.z + (mountain.userData.direction ?? -1) * 800;
+            mountain.userData.horizonTravel = 0;
             const targetScene = scenes[isSceneTransitioning ? nextSceneIndex : currentSceneIndex];
             if (mountain.userData.scene !== targetScene && !mountain.userData.horizonBlend) {
                 const outgoing = new THREE.Group();
@@ -2199,9 +2227,18 @@ function animateMountains() {
             return;
         }
 
+        if (mountain.userData.type === 'horizon') {
+            mountain.userData.horizonTravel = (mountain.userData.horizonTravel ?? 0) + speed * frameScale;
+            mountain.position.z += speed * frameScale;
+            if (mountain.userData.horizonTravel >= rearSceneryDistance) {
+                removeScenery(mountain);
+                mountains[index] = null;
+            } else updateSceneryFade(mountain);
+            return;
+        }
         mountain.position.z += speed * frameScale;
-        
-        if (mountain.position.z > camera.position.z + 100) {
+
+        if (mountain.position.z > camera.position.z + rearSceneryDistance) {
             if (!DEBUG.toggles.showMountains.value) {
                 // Remove mountain when it passes behind camera if toggle is off
                 removeScenery(mountain);
@@ -2337,7 +2374,7 @@ function animate(timestamp = performance.now()) {
                     
                     for (let j = 0; j < positions.length; j += 3 * step) {
                         const starZ = positions[j + 2];
-                        if (starZ < camera.position.z) {
+                        if (starZ < camera.position.z + rearSceneryDistance) {
                             // At least one star is in front of camera, keep this system
                             allStarsBehindCamera = false;
                             break;
@@ -2616,7 +2653,7 @@ function animateTraffic() {
     traffic = traffic.filter(car => {
         car.position.z += (speed + car.userData.approachSpeed) * frameScale;
         updateSceneryFade(car);
-        if (car.position.z > camera.position.z + 25) {
+        if (car.position.z > camera.position.z + rearSceneryDistance) {
             removeScenery(car);
             return false;
         }
@@ -2630,7 +2667,7 @@ function animateRoad() {
         [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(line => {
             if (line) line.position.z += speed * frameScale;
         });
-        if (roadSegments.length && roadSegments[0].position.z - 225 > camera.position.z + 50) {
+        if (roadSegments.length && roadSegments[0].position.z - 400 > camera.position.z + rearSceneryDistance) {
             roadSegments.forEach(removeScenery);
             [leftEdgeLine, rightEdgeLine, leftYellowLine, rightYellowLine].forEach(removeScenery);
             roadSegments = [];
@@ -2764,7 +2801,7 @@ function animateClouds() {
         cloud.position.x = cloud.userData.originalX + Math.sin(Date.now() * 0.0001) * 10;
         
         // If cloud is behind camera, move it far ahead
-        if (cloud.position.z > camera.position.z + 50) {
+        if (cloud.position.z > camera.position.z + rearSceneryDistance) {
             cloud.position.z = camera.position.z - 600 - Math.random() * 200;
             cloud.userData.originalX = (Math.random() - 0.5) * 400;
             cloud.position.x = cloud.userData.originalX;
@@ -2827,21 +2864,14 @@ function setupEventListeners() {
             // Reset camera with ESC key
             if (e.key === 'Escape') {
                 camera.position.set(2, 2.5, 0);
-                cameraTarget = new THREE.Vector3(0, 0, -40); // Adjusted to keep the same viewing angle
+                setCameraView(0);
                 camera.lookAt(cameraTarget);
                 log('Camera position reset', 'info');
             }
 
-            // Rotate camera 180 degrees with 'r' key
-            if (e.key === 'r' || e.key === 'R') {
-                // Rotate camera target 180 degrees around camera position
-                const dx = cameraTarget.x - camera.position.x;
-                const dz = cameraTarget.z - camera.position.z;
-                cameraTarget.x = camera.position.x - dx;
-                cameraTarget.z = camera.position.z - dz;
-                camera.lookAt(cameraTarget);
-                log('Camera rotated 180 degrees', 'info');
-            }
+            // Cycle cardinal views clockwise without moving the camera.
+            if (e.key === 'r' || e.key === 'R') cycleCameraView();
+
         });
         
         window.addEventListener('keyup', (e) => {
@@ -3837,13 +3867,14 @@ function createHorizonPlanes(isCity) {
     const currentScene = scenes[currentSceneIndex];
     
     // Create distant horizon plane on both sides
+    for (const direction of [-1, 1]) {
     for (let side = -1; side <= 1; side += 2) {
         const horizonGroup = new THREE.Group();
         
         // Position far in the distance
         const horizonDistance = mountainZoneStart + mountainZoneWidth * 1.2;
         horizonGroup.position.x = side * horizonDistance;
-        horizonGroup.position.z = camera.position.z - 800;
+        horizonGroup.position.z = camera.position.z + direction * 800;
         
         if (isCity) {
             // Create distant city skyline silhouette
@@ -3857,12 +3888,14 @@ function createHorizonPlanes(isCity) {
         horizonGroup.userData = {
             scene: currentScene,
             type: 'horizon',
-            side: side
+            side: side,
+            direction
         };
         
         startSceneryFade(horizonGroup);
         scene.add(horizonGroup);
         mountains.push(horizonGroup);
+    }
     }
 }
 
